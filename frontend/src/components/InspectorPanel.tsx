@@ -3,6 +3,7 @@ import type { Change, Deliverable, PlanState } from "../types";
 import { addDays, daysBetween, formatDate } from "../state/dates";
 import { DEFAULT_WORKFLOW, addPhase, hasPhases, minDuration, moveEnd, moveStart, phaseSpans, refitPhases, removePhase, renamePhase, splitIntoPhases } from "../state/phases";
 import { newId } from "../state/staging";
+import { deliverableStatus, phaseStatuses, spanStatus, statusLabel, type Status } from "../state/status";
 import { LANE_COLORS } from "../timeline/TimelineCanvas";
 
 interface Props {
@@ -15,6 +16,38 @@ interface Props {
   onRevert: (id: string) => void;
   onSelect: (id: string | null) => void;
   onAddDeliverable: (workstreamId: string) => void;
+  /** Status is judged as of this day. */
+  asOf: string;
+  /** Mark a deliverable (phase null) or one of its phases done, or reopen it (finishedOn null). */
+  onProgress: (id: string, phase: number | null, finishedOn: string | null) => Promise<void>;
+}
+
+function StatusChip({ status }: { status: Status }) {
+  return <span className={`status-chip ${status.kind}`}>{statusLabel(status)}</span>;
+}
+
+/** Mark done (with a finish date, default today) or Reopen. Recorded immediately, no staging. */
+function ProgressAction({ id, status, asOf, onDone, onReopen, reopenTitle }: { id: string; status: Status; asOf: string; onDone: (day: string) => void; onReopen: () => void; reopenTitle?: string }) {
+  const [day, setDay] = useState(asOf);
+  useEffect(() => setDay(asOf), [asOf]);
+  if (status.kind === "done") {
+    return (
+      <div className="progress-action">
+        <span className="muted small">Finished {formatDate(status.finishedOn!)}</span>
+        <button className="small secondary" title={reopenTitle} onClick={onReopen}>
+          Reopen
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="progress-action">
+      <input type="date" id={`finish-${id}`} value={day} max={asOf} onChange={(e) => e.target.value && setDay(e.target.value)} aria-label="Finish date" />
+      <button className="small done-btn" onClick={() => onDone(day)}>
+        Mark done
+      </button>
+    </div>
+  );
 }
 
 /** Text input that stages its value on blur/Enter instead of on every keystroke. */
@@ -43,7 +76,16 @@ function CommitOnBlurInput({ value, onCommit, disabled, ...rest }: { value: stri
   );
 }
 
-function PhasesSection({ d, persisted, editable, update }: { d: Deliverable; persisted: Deliverable | undefined; editable: boolean; update: (fields: Record<string, unknown>) => void }) {
+interface ProgressProps {
+  asOf: string;
+  /** Progress can be recorded: live view, and the deliverable is saved (not a staged new one). */
+  canRecord: boolean;
+  onProgress: (phase: number | null, finishedOn: string | null) => void;
+}
+
+function PhasesSection({ d, persisted, editable, update, progress }: { d: Deliverable; persisted: Deliverable | undefined; editable: boolean; update: (fields: Record<string, unknown>) => void; progress: ProgressProps }) {
+  const statuses = phaseStatuses(d, progress.asOf);
+  const nextIndex = statuses.findIndex((p) => p.status.kind !== "done");
   const spans = phaseSpans(d);
   if (spans.length === 0) {
     const split = splitIntoPhases(d);
@@ -143,6 +185,21 @@ function PhasesSection({ d, persisted, editable, update }: { d: Deliverable; per
                   )}
                 </label>
               </div>
+              <div className="phase-progress">
+                {statuses[sp.index] && <StatusChip status={statuses[sp.index].status} />}
+                {progress.canRecord && (statuses[sp.index]?.status.kind === "done" || sp.index === nextIndex) ? (
+                  <ProgressAction
+                    id={`${d.id}-${sp.index}`}
+                    status={statuses[sp.index].status}
+                    asOf={progress.asOf}
+                    onDone={(day) => progress.onProgress(sp.index, day)}
+                    onReopen={() => progress.onProgress(sp.index, null)}
+                    reopenTitle={sp.index < spans.length - 1 ? "Also reopens the phases after it" : undefined}
+                  />
+                ) : (
+                  progress.canRecord && sp.index > nextIndex && nextIndex >= 0 && <span className="muted small">After {spans[sp.index - 1].name}</span>
+                )}
+              </div>
               {was && (was.days !== sp.days || was.start !== sp.start) && (
                 <div className="muted small">
                   was {formatDate(was.start)} – {formatDate(was.end)} · {was.days}d
@@ -178,6 +235,11 @@ function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
   const linked = new Set([d.id, ...preds.map((p) => p.predecessor_id), ...succs.map((s) => s.successor_id)]);
   const candidates = state.deliverables.filter((x) => !linked.has(x.id)).sort((a, b) => a.name.localeCompare(b.name));
   const persisted = props.persisted.deliverables.find((x) => x.id === d.id);
+  const progress: ProgressProps = {
+    asOf: props.asOf,
+    canRecord: editable && !!persisted,
+    onProgress: (phase, finishedOn) => void props.onProgress(d.id, phase, finishedOn),
+  };
   const duration = daysBetween(d.start_date, d.end_date) + 1;
 
   const link = (predecessor_id: string, successor_id: string) =>
@@ -256,7 +318,24 @@ function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
         )}
       </div>
 
-      {d.type === "task" && <PhasesSection d={d} persisted={persisted} editable={editable} update={update} />}
+      {d.type === "task" && !hasPhases(d) && (
+        <>
+          <h4>Progress</h4>
+          <div className="phase-progress">
+            <StatusChip status={spanStatus({ start: d.start_date, end: d.end_date, finishedOn: d.finished_on }, props.asOf)} />
+            {progress.canRecord && (
+              <ProgressAction
+                id={d.id}
+                status={deliverableStatus(d, props.asOf)!}
+                asOf={props.asOf}
+                onDone={(day) => progress.onProgress(null, day)}
+                onReopen={() => progress.onProgress(null, null)}
+              />
+            )}
+          </div>
+        </>
+      )}
+      {d.type === "task" && <PhasesSection d={d} persisted={persisted} editable={editable} update={update} progress={progress} />}
 
       <h4>Depends on</h4>
       <ul className="dep-list">

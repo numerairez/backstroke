@@ -1,9 +1,9 @@
 // Local staged-change model. Staged changes are the only way the UI proposes plan edits;
 // nothing here is persisted until the server accepts a commit containing them.
 
-import type { Change, Deliverable, Dependency, EntityType, PlanState, Workstream } from "../types";
+import type { Change, Deliverable, Dependency, EntityType, Phase, PlanState, Workstream } from "../types";
 import { daysBetween, formatDate, signedDays } from "./dates";
-import { describePhases, hasPhases } from "./phases";
+import { carryProgress, describePhases, hasPhases } from "./phases";
 
 const COLLECTION = { workstream: "workstreams", deliverable: "deliverables", dependency: "dependencies" } as const;
 
@@ -61,6 +61,23 @@ export function stageChange(staged: Change[], change: Change, persisted: PlanSta
   if (type === "deliverable") next = next.filter((c) => !referencesDeliverable(c, id));
   if (existing?.operation === "create") return next;
   return [...next, change];
+}
+
+/**
+ * After Mark done lands, staged phase edits made earlier still hold the old finish dates.
+ * Refresh them from the saved plan, as the server does when they are committed.
+ */
+export function rebaseProgress(staged: Change[], persisted: PlanState): Change[] {
+  let changed = false;
+  const next = staged.map((c) => {
+    if (c.entity_type !== "deliverable" || c.operation !== "update" || !Array.isArray(c.fields.phases)) return c;
+    const saved = persisted.deliverables.find((d) => d.id === c.entity_id);
+    const phases = carryProgress(saved?.phases, c.fields.phases as Phase[]);
+    if (sameValue(phases, c.fields.phases)) return c;
+    changed = true;
+    return { ...c, fields: { ...c.fields, phases } };
+  });
+  return changed ? next : staged;
 }
 
 /** Drop every staged change for one entity (Escape / revert). */

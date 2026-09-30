@@ -111,6 +111,7 @@ class DeliverableState(Base):
     start_date: Mapped[str] = mapped_column(String)
     end_date: Mapped[str] = mapped_column(String)
     phases: Mapped[list | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    finished_on: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class DependencyState(Base):

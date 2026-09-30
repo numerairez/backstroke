@@ -16,6 +16,7 @@ export interface Phase {
   name: string;
   days?: number;
   gap?: number;
+  finished_on?: string; // set by Mark done; phases finish in order
 }
 
 export interface Deliverable {
@@ -26,6 +27,8 @@ export interface Deliverable {
   start_date: string;
   end_date: string;
   phases?: Phase[] | null;
+  /** When a deliverable without phases was marked done (phased ones use their phases). */
+  finished_on?: string | null;
 }
 
 export interface Dependency {
@@ -91,6 +94,8 @@ export interface Category {
   code: string;
   label: string;
   description: string;
+  /** false for categories the app records itself (Progress). */
+  selectable?: boolean;
 }
 
 export interface ValidationError {
@@ -147,6 +152,7 @@ export interface DeliverableDiff extends EntityDiff<Deliverable> {
     start_delta_days: number;
     end_delta_days: number;
   }[];
+  progress?: { phase: string | null; before: string | null; after: string | null }[];
 }
 
 export interface Diff {
@@ -205,5 +211,19 @@ export interface Metrics {
     not_compared: number;
     phases: { name: string; net_days: number; longer_days: number; shorter_days: number; deliverables: number }[];
     gaps: { net_days: number; longer_days: number; shorter_days: number };
+  };
+  finishes: {
+    on_time: number;
+    total: number;
+    rows: {
+      deliverable_id: string;
+      name: string;
+      phase: string | null;
+      finished_on: string;
+      planned_end: string;
+      delta_days: number;
+      baseline_end: string | null;
+      baseline_delta_days: number | null;
+    }[];
   };
 }

@@ -195,6 +195,42 @@ export function MetricsPanel({ projectId, version, baselines, categories, onSele
         </>
       )}
 
+      {metrics.finishes.total > 0 && (
+        <>
+          <h4>Finishes vs plan</h4>
+          <table className="diff-table">
+            <thead>
+              <tr>
+                <th>Finished</th>
+                <th className="num" title="Planned end when it was marked done">Planned</th>
+                <th className="num">Actual</th>
+                <th className="num" title="Actual minus planned end">Δ</th>
+                <th className="num" title="Actual minus the baseline's planned end">vs baseline</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.finishes.rows.map((r) => (
+                <tr key={`${r.deliverable_id}-${r.phase ?? ""}`}>
+                  <td>
+                    <button className="link" onClick={() => onSelect(r.deliverable_id)}>
+                      {r.name}
+                    </button>
+                    {r.phase && <span className="muted"> · {r.phase}</span>}
+                  </td>
+                  <td className="num muted">{formatDate(r.planned_end)}</td>
+                  <td className="num">{formatDate(r.finished_on)}</td>
+                  <td className={`num ${r.delta_days > 0 ? "later" : r.delta_days < 0 ? "earlier" : ""}`}>{r.delta_days ? signedDays(r.delta_days) : "±0"}</td>
+                  <td className="num muted">{r.baseline_delta_days === null ? "—" : signedDays(r.baseline_delta_days)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted small">
+            {metrics.finishes.on_time} of {metrics.finishes.total} finished on or before the planned end. Each finish is measured against the plan when it was marked done, so a later replan can't hide a late finish.
+          </p>
+        </>
+      )}
+
       <h4>Movement by reason</h4>
       <ReasonAttribution rows={metrics.by_category} categories={categories} />
 

@@ -4,7 +4,7 @@ import pytest
 
 from app.domain.events import Event, apply_events, empty_state, serialize_state
 from app.domain.phases import phase_spans
-from app.seed import CHECKOUT_HISTORY, CHECKOUT_ID
+from app.seed import CHECKOUT_HISTORY, CHECKOUT_ID, CHECKOUT_PROGRESS
 from app.services import projection_service, version_service
 
 from .conftest import commit, move
@@ -125,7 +125,7 @@ def test_create_events_written_before_phases_replay_as_plain():
 
 def test_checkout_seed_replays_to_its_projection(session):
     version = version_service.current_version(session, CHECKOUT_ID)
-    assert version == len(CHECKOUT_HISTORY)
+    assert version == len(CHECKOUT_HISTORY) + len(CHECKOUT_PROGRESS)
     replayed = version_service.state_at(session, CHECKOUT_ID, version)
     assert serialize_state(replayed) == serialize_state(projection_service.load_state(session, CHECKOUT_ID))
 

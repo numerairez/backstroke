@@ -12,6 +12,7 @@ import { addDays, formatTimestamp, todayIso } from "./state/dates";
 import { newId, stagedEntityIds } from "./state/staging";
 import { useProject } from "./state/useProject";
 import { PHASE_COLORS, phaseNameOrder } from "./state/phases";
+import { deliverableStatus, type StatusKind } from "./state/status";
 import { TimelineCanvas, type ColorBy } from "./timeline/TimelineCanvas";
 import type { Category, PlanState, Project } from "./types";
 
@@ -249,6 +250,31 @@ export default function App() {
 
   const phaseNames = useMemo(() => phaseNameOrder(displayed.deliverables), [displayed.deliverables]);
 
+  // Status is judged as of today when live, or as of the commit's date when replaying history.
+  const shownCommit = !showingLive && shownVersion ? p.commits.find((c) => c.seq === shownVersion) : undefined;
+  const asOf = shownCommit ? shownCommit.created_at.slice(0, 10) : today;
+  const statusCounts = useMemo(() => {
+    const counts: Record<StatusKind, number> = { done: 0, progress: 0, behind: 0, overdue: 0, todo: 0 };
+    for (const d of displayed.deliverables) {
+      const s = deliverableStatus(d, asOf);
+      if (s) counts[s.kind]++;
+    }
+    return counts;
+  }, [displayed.deliverables, asOf]);
+
+  const recordProgress = async (id: string, phase: number | null, finishedOn: string | null) => {
+    const who = author.trim() || window.prompt("Your name (recorded as the author):")?.trim();
+    if (!who) return;
+    setAuthor(who);
+    try {
+      const commit = await p.recordProgress(who, id, phase, finishedOn);
+      flash(`#${commit.seq}: ${commit.reason}`);
+    } catch (e) {
+      const err = e as ApiError;
+      window.alert(err.errors?.length ? err.errors.map((x) => x.message).join("\n") : err.message);
+    }
+  };
+
   const baseline = p.project?.baselines[0];
   const staged = p.staged.length;
 
@@ -283,6 +309,13 @@ export default function App() {
           <span className="version-chip">
             Current: <b>#{p.version}</b>
           </span>
+        </div>
+        <div className="status-counts" title={`Status as of ${asOf}`}>
+          {statusCounts.done > 0 && <span className="st done">{statusCounts.done} done</span>}
+          {statusCounts.progress > 0 && <span className="st">{statusCounts.progress} in progress</span>}
+          {statusCounts.behind > 0 && <span className="st behind">{statusCounts.behind} behind</span>}
+          {statusCounts.overdue > 0 && <span className="st overdue">{statusCounts.overdue} overdue</span>}
+          {statusCounts.todo > 0 && <span className="st">{statusCounts.todo} not started</span>}
         </div>
         <div className="spacer" />
         {staged > 0 && (
@@ -374,6 +407,7 @@ export default function App() {
             conflicts={conflicts}
             selectedId={selectedId}
             focusKey={projectId ?? ""}
+            asOf={asOf}
             expanded={expanded}
             colorBy={colorBy}
             onToggleExpand={toggleExpand}
@@ -435,6 +469,8 @@ export default function App() {
                 selectedId={selectedId}
                 editable={editable}
                 stagedIds={stagedIds}
+                asOf={asOf}
+                onProgress={recordProgress}
                 onStage={p.stage}
                 onRevert={(id) => p.revert("deliverable", id)}
                 onSelect={select}

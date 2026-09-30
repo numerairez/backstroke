@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, type CommitInput } from "../api/client";
 import type { Change, CommitSummary, EntityType, PlanState, Preview, Project } from "../types";
-import { applyChanges, revertEntity, stageChange } from "./staging";
+import { applyChanges, rebaseProgress, revertEntity, stageChange } from "./staging";
 
 const EMPTY: PlanState = { workstreams: [], deliverables: [], dependencies: [] };
 
@@ -45,6 +45,8 @@ export interface ProjectStore {
   discard: () => void;
   commit: (input: Omit<CommitInput, "changes" | "base_version">) => Promise<CommitSummary>;
   revertCommit: (seq: number, author: string, reason?: string) => Promise<CommitSummary>;
+  /** Mark a deliverable (phase null) or one of its phases done on a date, or reopen it (null). */
+  recordProgress: (author: string, deliverableId: string, phase: number | null, finishedOn: string | null) => Promise<CommitSummary>;
   createBaseline: (name: string, version: number) => Promise<void>;
   stateAt: (version: number) => Promise<PlanState>;
   cachedStateAt: (version: number) => PlanState | undefined;
@@ -107,6 +109,8 @@ export function useProject(projectId: string | null): ProjectStore {
     };
   }, [projectId, project, staged, version]);
 
+  useEffect(() => setStaged((s) => rebaseProgress(s, persisted)), [persisted]);
+
   const proposed = useMemo(() => applyChanges(persisted, staged), [persisted, staged]);
 
   const stage = useCallback((change: Change) => setStaged((s) => stageChange(s, change, persisted)), [persisted]);
@@ -133,6 +137,24 @@ export function useProject(projectId: string | null): ProjectStore {
     async (seq: number, author: string, reason?: string) => {
       if (!projectId) throw new Error("no project");
       const result = await api.revert(projectId, seq, { author, base_version: version, reason });
+      await refresh();
+      return result.commit;
+    },
+    [projectId, version, refresh],
+  );
+
+  const recordProgress = useCallback(
+    async (author: string, deliverableId: string, phase: number | null, finishedOn: string | null) => {
+      if (!projectId) throw new Error("no project");
+      const input = { author, deliverable_id: deliverableId, phase, finished_on: finishedOn };
+      let result;
+      try {
+        result = await api.progress(projectId, { ...input, base_version: version });
+      } catch (e) {
+        // Someone else committed meanwhile. Progress doesn't depend on the plan version, so retry once on the latest.
+        if (!isVersionConflict(e)) throw e;
+        result = await api.progress(projectId, { ...input, base_version: (e.body.current_version as number) ?? version });
+      }
       await refresh();
       return result.commit;
     },
@@ -182,6 +204,7 @@ export function useProject(projectId: string | null): ProjectStore {
     discard,
     commit,
     revertCommit,
+    recordProgress,
     createBaseline,
     stateAt,
     cachedStateAt,

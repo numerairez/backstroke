@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from .events import ENTITY_COLLECTIONS, Event, State, apply_event
+from .phases import carry_progress
 from .validators import FIELD_DEFAULTS, FIELD_SPECS, FieldError, normalize_field, validate_state
 
 EntityType = Literal["workstream", "deliverable", "dependency"]
@@ -34,6 +35,14 @@ class CommitRequest(BaseModel):
 
 class PreviewRequest(BaseModel):
     changes: list[Change]
+
+
+class ProgressRequest(BaseModel):
+    author: str
+    base_version: int
+    deliverable_id: str
+    phase: int | None = None  # index into the deliverable's phases; None for a deliverable without phases
+    finished_on: str | None = None  # None reopens
 
 
 class RevertRequest(BaseModel):
@@ -71,8 +80,11 @@ def new_entity_id(entity_type: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}"
 
 
-def build_events(state: State, changes: list[Change]) -> ChangePlan:
+def build_events(state: State, changes: list[Change], allow_progress: bool = False) -> ChangePlan:
     """Validate `changes` against `state` and produce the ordered events.
+
+    Progress (finish dates) is recorded only through Mark done / Reopen, which pass
+    `allow_progress`. Plan edits can't set it, and edited phases keep their finish dates.
 
     Old values always come from `state`, never from the client. Changes are
     applied in order, so later changes see earlier ones (e.g. create a
@@ -106,6 +118,21 @@ def build_events(state: State, changes: list[Change]) -> ChangePlan:
                 field_error = True
         if field_error:
             continue
+
+        if change.entity_type == "deliverable" and not allow_progress:
+            if "finished_on" in normalized:
+                err(index, "progress_field", "Finish dates are recorded with Mark done, not in a plan change")
+                continue
+            current = collection.get(change.entity_id or "") if change.operation == "update" else None
+            if "phases" in normalized:
+                normalized["phases"] = carry_progress(current.get("phases") if current else None, normalized["phases"])
+            if current and "phases" in normalized:
+                # Adding or removing phases moves the finish date between the bar and its last phase.
+                if current.get("phases") and normalized["phases"] is None and current["phases"][-1].get("finished_on"):
+                    normalized["finished_on"] = current["phases"][-1]["finished_on"]
+                elif not current.get("phases") and normalized["phases"] and current.get("finished_on"):
+                    normalized["phases"] = [{**p, "finished_on": current["finished_on"]} for p in normalized["phases"]]
+                    normalized["finished_on"] = None
 
         if change.operation == "create":
             entity_id = change.entity_id or new_entity_id(change.entity_type)

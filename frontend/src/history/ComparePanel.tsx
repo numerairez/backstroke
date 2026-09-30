@@ -128,12 +128,13 @@ export function ComparePanel({ projectId, commits, baselines, version, range, on
                     const a = d.before!;
                     const b = d.after!;
                     const extra = (d.changes ?? [])
-                      .filter((c) => !c.field.endsWith("_date") && !(c.field === "phases" && d.phase_deltas))
+                      .filter((c) => !c.field.endsWith("_date") && c.field !== "finished_on" && !(c.field === "phases" && d.phase_deltas))
                       .map((c) => {
                         if (c.field === "workstream_id") return "lane changed";
                         if (c.field === "phases") return !c.old ? "broken into phases" : !c.new ? "phases removed" : "phases renamed or reordered";
                         return `${c.field}: ${String(c.old)} → ${String(c.new)}`;
                       });
+                    const progress = (d.progress ?? []).map((x) => (x.after ? `${x.phase ?? "done"}${x.phase ? " done" : ""} ${formatDate(x.after)}` : `${x.phase ?? "reopened"}${x.phase ? " reopened" : ""}`));
                     const phaseMoves = (d.phase_deltas ?? []).flatMap((x) => {
                       const gap = x.after_gap_days - x.before_gap_days;
                       return [...(gap ? [{ key: `gap-${x.name}`, text: `gap before ${x.name}`, delta: gap }] : []), ...(x.delta_days ? [{ key: x.name, text: x.name, delta: x.delta_days }] : [])];
@@ -145,6 +146,7 @@ export function ComparePanel({ projectId, commits, baselines, version, range, on
                             {b.name}
                           </button>
                           {!!d.duration_delta_days && <div className="muted small">duration {signedDays(d.duration_delta_days)}</div>}
+                          {progress.length > 0 && <div className="small progress-lines">✓ {progress.join(", ")}</div>}
                           {phaseMoves.length > 0 && (
                             <div className="small phase-moves">
                               {phaseMoves.map((x) => (

@@ -34,6 +34,18 @@ def _entity_diffs(entity_type: str, old: dict[str, dict], new: dict[str, dict]) 
     return out
 
 
+def _progress_changes(a: dict[str, Any], b: dict[str, Any]) -> list[dict[str, Any]]:
+    """Finish dates set or cleared between two versions (phase None for the whole deliverable)."""
+    out = []
+    if a.get("finished_on") != b.get("finished_on"):
+        out.append({"phase": None, "before": a.get("finished_on"), "after": b.get("finished_on")})
+    before = {p["name"]: p.get("finished_on") for p in a.get("phases") or []}
+    for p in b.get("phases") or []:
+        if p["name"] in before and before[p["name"]] != p.get("finished_on"):
+            out.append({"phase": p["name"], "before": before[p["name"]], "after": p.get("finished_on")})
+    return out
+
+
 def diff_states(old: State, new: State) -> dict[str, Any]:
     deliverables = _entity_diffs("deliverable", old["deliverables"], new["deliverables"])
     for entry in deliverables:
@@ -48,6 +60,9 @@ def diff_states(old: State, new: State) -> dict[str, Any]:
         deltas = phase_deltas(a, b)
         if deltas is not None:
             entry["phase_deltas"] = deltas
+        progress = _progress_changes(a, b)
+        if progress:
+            entry["progress"] = progress
 
     workstreams = _entity_diffs("workstream", old["workstreams"], new["workstreams"])
     dependencies = _entity_diffs("dependency", old["dependencies"], new["dependencies"])

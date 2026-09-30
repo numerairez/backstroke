@@ -59,6 +59,8 @@ export const api = {
   commits: (id: string) => request<CommitSummary[]>(`/projects/${id}/commits?include_events=true`),
   preview: (id: string, changes: Change[]) => post<Preview>(`/projects/${id}/preview`, { changes }),
   commit: (id: string, input: CommitInput) => post<CommitResult>(`/projects/${id}/commits`, input),
+  progress: (id: string, input: { author: string; base_version: number; deliverable_id: string; phase: number | null; finished_on: string | null }) =>
+    post<CommitResult>(`/projects/${id}/progress`, input),
   revert: (id: string, seq: number, input: { author: string; base_version: number; reason?: string }) =>
     post<CommitResult>(`/projects/${id}/commits/${seq}/revert`, input),
   diff: (id: string, from: number, to: number) => request<Diff>(`/projects/${id}/diff?from=${from}&to=${to}`),

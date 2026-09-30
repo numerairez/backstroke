@@ -13,7 +13,8 @@ from ..domain.commands import Change, DomainError, build_events
 from ..domain.events import ENTITY_COLLECTIONS, Event, serialize_state
 from ..domain.models import IDENTITY_MODELS, Commit, Project
 from ..domain.models import Event as EventRow
-from ..domain.validators import CATEGORY_CODES
+from ..domain.validators import CATEGORY_CODES, PROGRESS_CATEGORY
+from ..domain.dates import format_day
 from . import dependency_service, projection_service, version_service
 
 
@@ -66,8 +67,12 @@ def create_commit(
     category: str | None = None,
     reference: str | None = None,
     created_at: str | None = None,
+    allow_progress: bool = False,
 ) -> tuple[Commit, list[Event]]:
-    """Append one commit. Call inside a transaction; it either fully applies or raises."""
+    """Append one commit. Call inside a transaction; it either fully applies or raises.
+
+    `allow_progress` lets the change set set or clear finish dates (Mark done, Reopen, undo).
+    """
     require_project(session, project_id)
 
     errors = []
@@ -77,6 +82,8 @@ def create_commit(
         errors.append({"change_index": None, "code": "author_required", "message": "An author is required"})
     if category is not None and category not in CATEGORY_CODES:
         errors.append({"change_index": None, "code": "invalid_category", "message": f"Unknown category {category!r}"})
+    if category == PROGRESS_CATEGORY and not allow_progress:
+        errors.append({"change_index": None, "code": "invalid_category", "message": "Progress commits are recorded with Mark done"})
     if errors:
         raise DomainError(errors)
 
@@ -85,7 +92,7 @@ def create_commit(
         raise VersionConflict(base_version, current)
 
     state = projection_service.load_state(session, project_id)
-    plan = build_events(state, changes)
+    plan = build_events(state, changes, allow_progress=allow_progress)
     if plan.errors:
         raise DomainError(plan.errors)
     if not plan.events:
@@ -191,6 +198,7 @@ def revert_commit(
     if original is None:
         raise NotFound(f"commit #{seq} not found")
     changes = inverse_changes(session, project_id, seq)
+    # Undo restores exactly what the commit changed, progress included.
     return create_commit(
         session,
         project_id,
@@ -198,6 +206,70 @@ def revert_commit(
         author=author,
         base_version=base_version,
         changes=changes,
-        category=category,
+        category=PROGRESS_CATEGORY if original.category == PROGRESS_CATEGORY else category,
         reference=f"revert:#{seq}",
+        allow_progress=True,
+    )
+
+
+def record_progress(
+    session: Session,
+    project_id: str,
+    *,
+    author: str,
+    base_version: int,
+    deliverable_id: str,
+    phase: int | None,
+    finished_on: str | None,
+    created_at: str | None = None,
+) -> tuple[Commit, list[Event]]:
+    """Mark a deliverable, or one of its phases, done on a date; or reopen it (finished_on=None).
+
+    Recorded as its own commit with an automatic reason. Reopening a phase also reopens
+    the phases after it, since phases finish in order.
+    """
+    require_project(session, project_id)
+    state = projection_service.load_state(session, project_id)
+    d = state["deliverables"].get(deliverable_id)
+    if d is None:
+        raise NotFound(f"deliverable {deliverable_id} not found")
+
+    def fail(message: str) -> DomainError:
+        return DomainError([{"change_index": None, "code": "invalid_progress", "message": message}])
+
+    if d["type"] == "milestone":
+        raise fail(f"Milestone “{d['name']}” can't be marked done")
+    if d.get("phases"):
+        phases = [dict(p) for p in d["phases"]]
+        if phase is None or not 0 <= phase < len(phases):
+            raise fail(f"Choose which phase of “{d['name']}” to update")
+        target = phases[phase]
+        if finished_on:
+            earlier = next((p for p in phases[:phase] if not p.get("finished_on")), None)
+            if earlier:
+                raise fail(f"Mark “{earlier['name']}” done first; phases finish in order")
+            target["finished_on"] = finished_on
+            what = f"{target['name']} done {format_day(finished_on)}"
+        else:
+            reopened = [p["name"] for p in phases[phase:] if p.get("finished_on")]
+            for p in phases[phase:]:
+                p.pop("finished_on", None)
+            what = f"{', '.join(reopened) or target['name']} reopened"
+        changes = [Change(entity_type="deliverable", entity_id=deliverable_id, operation="update", fields={"phases": phases})]
+    else:
+        if phase is not None:
+            raise fail(f"“{d['name']}” has no phases")
+        what = f"done {format_day(finished_on)}" if finished_on else "reopened"
+        changes = [Change(entity_type="deliverable", entity_id=deliverable_id, operation="update", fields={"finished_on": finished_on})]
+
+    return create_commit(
+        session,
+        project_id,
+        reason=f"{d['name']}: {what}",
+        author=author,
+        base_version=base_version,
+        changes=changes,
+        category=PROGRESS_CATEGORY,
+        created_at=created_at,
+        allow_progress=True,
     )

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Change, Conflict, Deliverable, PlanState } from "../types";
 import { addDays, daysBetween, formatDate, formatMonth, signedDays } from "../state/dates";
 import { PHASE_COLORS, hasPhases, minDuration, moveEnd, moveStart, phaseDeltas, phaseLengths, phaseNameOrder, phaseSpans, refitPhases, samePhases } from "../state/phases";
+import { deliverableStatus, phaseStatuses, statusLabel } from "../state/status";
 import { BAR_HEIGHT, HEADER_HEIGHT, PHASE_ROW_HEIGHT, ROW_HEIGHT, buildTimelineModel, monthTicks, weekTicks, type TimelineItem, type TimelineModel } from "./model";
 
 export const LANE_COLORS = ["#4f6bed", "#0e9384", "#d97706", "#9b51e0", "#db2777", "#0284c7", "#65a30d", "#dc5a2c"];
@@ -33,6 +34,8 @@ interface Props {
   conflicts: Conflict[];
   selectedId: string | null;
   focusKey: string;
+  /** The day status is judged against: today when live, the commit's date when replaying. */
+  asOf: string;
   expanded: Set<string>;
   colorBy: ColorBy;
   onToggleExpand: (id: string) => void;
@@ -282,6 +285,10 @@ export function TimelineCanvas(props: Props) {
           onPointerDown={() => props.onSelect(null)}
         >
           <defs>
+            <pattern id="overrun-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <rect width="6" height="6" className="overrun-bg" />
+              <rect width="2.5" height="6" className="overrun-stripe" />
+            </pattern>
             <pattern id="staged-stripes" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
               <rect width="6" height="6" fill="transparent" />
               <line x1="0" y1="0" x2="0" y2="6" className="stripe" strokeWidth="3" />
@@ -375,20 +382,29 @@ export function TimelineCanvas(props: Props) {
             const selected = selectedId === item.id;
             const removed = item.status === "removed";
             const conflict = conflictSuccessors.has(item.id);
-            const classes = ["item", d.type, phased && "phased", staged && "staged", selected && "selected", removed && "removed", editable && !removed && "editable", conflict && "conflict", animate && !drag && "animate"]
+            const status = removed ? null : deliverableStatus(d, props.asOf);
+            const phaseStates = phased && !removed ? phaseStatuses(d, props.asOf) : [];
+            const rx = (day: string) => model.x(day) - g.x; // relative to the bar's left edge
+            const overrunEnd = status?.kind === "overdue" ? rx(addDays(props.asOf, 1)) : 0;
+            const checkX = status?.kind === "done" ? rx(status.finishedOn!) + dayWidth / 2 : null;
+            const classes = ["item", d.type, phased && "phased", status && `st-${status.kind}`, staged && "staged", selected && "selected", removed && "removed", editable && !removed && "editable", conflict && "conflict", animate && !drag && "animate"]
               .filter(Boolean)
               .join(" ");
             const labelInside = d.type === "task" && !phased && g.w > d.name.length * 6.6 + 16;
             const delta = item.endDelta || item.startDelta;
             let title = d.type === "milestone" ? `${d.name} · ${formatDate(d.start_date)}` : `${d.name} · ${formatDate(d.start_date)} – ${formatDate(d.end_date)} (${daysBetween(d.start_date, d.end_date) + 1}d)`;
-            if (phased) title += "\n" + spans.map((sp) => `${sp.name}: ${formatDate(sp.start)} – ${formatDate(sp.end)} (${sp.days}d)`).join("\n");
+            if (phased) title += "\n" + phaseStates.map(({ span: sp, status: ps }) => `${sp.name}: ${formatDate(sp.start)} – ${formatDate(sp.end)} (${sp.days}d) · ${statusLabel(ps)}`).join("\n");
+            if (status) title += `\n${statusLabel(status)}`;
 
             // Everything inside the group is positioned relative to the bar's left edge (or the
             // milestone's centre), so moving between versions is a single animatable transform.
             const barTop = -BAR_HEIGHT / 2;
-            let afterX = g.right - g.x + 6;
+            let afterX = Math.max(g.right - g.x, overrunEnd, checkX === null ? 0 : checkX + 8) + 6;
             const chips: { text: string; cls: string }[] = [];
             if (staged) chips.push({ text: "pending", cls: "pending" });
+            if (status?.kind === "done") chips.push({ text: `done ${formatDate(status.finishedOn!)}${status.delta ? ` · ${signedDays(status.delta)}` : ""}`, cls: "done" });
+            if (status?.kind === "overdue") chips.push({ text: `overdue ${status.days}d`, cls: "overdue" });
+            if (status?.kind === "behind") chips.push({ text: `behind · ${status.current!.name} ${status.days}d late`, cls: "behind" });
             if (item.status === "added") chips.push({ text: "Added", cls: "added" });
             if (removed) chips.push({ text: "Removed", cls: "removed" });
             if (item.status === "changed" && delta) chips.push({ text: signedDays(delta), cls: delta > 0 ? "later" : "earlier" });
@@ -413,6 +429,8 @@ export function TimelineCanvas(props: Props) {
                   <path d="M0,-9 l9,9 l-9,9 l-9,-9 z" className="shape" />
                 ) : (
                   <>
+                    {/* Overdue: hatched from the planned end to today. */}
+                    {overrunEnd > g.w && <rect x={g.w} y={barTop} width={overrunEnd - g.w} height={BAR_HEIGHT} rx={3} className="overrun" />}
                     {phased && (
                       <>
                         <clipPath id={`phase-clip-${item.id}`}>
@@ -423,7 +441,9 @@ export function TimelineCanvas(props: Props) {
                             const sx = daysBetween(d.start_date, sp.start) * dayWidth;
                             const sw = sp.days * dayWidth;
                             const f = phaseFill(colorBy, laneColor, sp.index, spans.length, sp.name, phaseOrder);
-                            const label = sw > sp.name.length * 6.2 + 12 ? sp.name : sw >= 16 ? sp.name[0] : "";
+                            const done = phaseStates[sp.index]?.status.kind === "done";
+                            const full = (done ? "✓ " : "") + sp.name;
+                            const label = sw > full.length * 6.2 + 12 ? full : sw >= 16 ? (done ? "✓" : sp.name[0]) : "";
                             const gx = sx - sp.gap * dayWidth;
                             return (
                               <g key={sp.index}>
@@ -435,7 +455,7 @@ export function TimelineCanvas(props: Props) {
                                     <line x1={gx} x2={sx} y1={0} y2={0} className="seg-gap-line" />
                                   </>
                                 )}
-                                <rect x={sx} y={barTop} width={sw} height={BAR_HEIGHT} className="seg" style={{ fill: f.fill }} />
+                                <rect x={sx} y={barTop} width={sw} height={BAR_HEIGHT} className={`seg ${done ? "done" : ""}`} style={{ fill: f.fill }} />
                                 {label && (
                                   <text x={sx + sw / 2} y={4} textAnchor="middle" className={`seg-label ${f.solid ? "solid" : "tint"}`}>
                                     {label}
@@ -449,6 +469,25 @@ export function TimelineCanvas(props: Props) {
                       </>
                     )}
                     <rect x={0} y={barTop} width={g.w} height={BAR_HEIGHT} rx={4} style={{ width: g.w }} className="shape" />
+                    {/* A phase past its end and not done: red underline from its end to today. */}
+                    {phaseStates
+                      .filter((p) => p.status.kind === "overdue")
+                      .map((p) => {
+                        const x = rx(addDays(p.span.end, 1));
+                        return (
+                          <rect key={`late-${p.span.index}`} x={x} y={-barTop + 2} width={Math.max(2, rx(addDays(props.asOf, 1)) - x)} height={3} rx={1.5} className="phase-overrun">
+                            <title>{`${p.span.name} ${p.status.days}d late`}</title>
+                          </rect>
+                        );
+                      })}
+                    {/* Done: a check on the actual finish date, linked back to the bar when it finished late. */}
+                    {checkX !== null && (
+                      <g className="finish">
+                        {checkX > g.w + 7 && <line x1={g.w} x2={checkX - 7} y1={0} y2={0} className="finish-link" />}
+                        <circle cx={checkX} cy={0} r={7} />
+                        <path d={`M${checkX - 3.2},0 l2.2,2.3 l4.2,-4.6`} />
+                      </g>
+                    )}
                     {staged && <rect x={0} y={barTop} width={g.w} height={BAR_HEIGHT} rx={4} style={{ width: g.w }} fill="url(#staged-stripes)" className="stripes" />}
                     {editable && !removed && g.w >= EDGE_GRAB * 3 && (
                       <>

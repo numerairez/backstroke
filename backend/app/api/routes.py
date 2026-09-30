@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProjectCreateRequest, RevertRequest
+from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, RevertRequest
 from ..domain.events import serialize_state
 from ..domain.validators import REASON_CATEGORIES
 from ..services import commit_service, diff_service, projection_service, history_service, metrics_service, project_service, version_service
@@ -29,7 +29,7 @@ def _version_or_404(session: Session, project_id: str, version: int) -> int:
 
 
 @router.get("/categories")
-def categories() -> list[dict[str, str]]:
+def categories() -> list[dict[str, Any]]:
     return REASON_CATEGORIES
 
 
@@ -94,6 +94,23 @@ def create_commit(project_id: str, body: CommitRequest, session: Session = Depen
         changes=body.changes,
         category=body.category,
         reference=body.reference,
+    )
+    result = commit_service.commit_result(session, project_id, commit, events)
+    session.commit()
+    return result
+
+
+@router.post("/projects/{project_id}/progress", status_code=201)
+def record_progress(project_id: str, body: ProgressRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Mark done or reopen: one click, recorded as its own commit without a reason."""
+    commit, events = commit_service.record_progress(
+        session,
+        project_id,
+        author=body.author,
+        base_version=body.base_version,
+        deliverable_id=body.deliverable_id,
+        phase=body.phase,
+        finished_on=body.finished_on,
     )
     result = commit_service.commit_result(session, project_id, commit, events)
     session.commit()

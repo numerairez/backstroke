@@ -21,12 +21,13 @@ FIELD_SPECS: dict[str, dict[str, str]] = {
         "start_date": "date",
         "end_date": "date",
         "phases": "phases",
+        "finished_on": "optional_date",
     },
     "dependency": {"predecessor_id": "ref", "successor_id": "ref", "type": "dependency_type"},
 }
 FIELD_DEFAULTS: dict[str, dict[str, Any]] = {
     "workstream": {},
-    "deliverable": {"type": "task", "phases": None},
+    "deliverable": {"type": "task", "phases": None, "finished_on": None},
     "dependency": {"type": "FS"},
 }
 
@@ -41,8 +42,11 @@ REASON_CATEGORIES = [
     {"code": "external", "label": "External", "description": "Regulatory, vendor, infrastructure, or other outside factor."},
     {"code": "correction", "label": "Correction", "description": "Previous plan entry was incorrect."},
     {"code": "other", "label": "Other", "description": "Free-form explanation when no category applies."},
+    # Recorded by Mark done / Reopen, never chosen in the commit dialog.
+    {"code": "progress", "label": "Progress", "description": "Work marked done or reopened.", "selectable": False},
 ]
 CATEGORY_CODES = {c["code"] for c in REASON_CATEGORIES}
+PROGRESS_CATEGORY = "progress"
 
 
 class FieldError(ValueError):
@@ -71,14 +75,11 @@ def normalize_field(entity_type: str, field: str, value: Any) -> Any:
             raise FieldError(f"{field} must be an integer")
         return value
     if kind == "date":
-        if not isinstance(value, str) or len(value) != 10:
-            raise FieldError(f"{field} must be a YYYY-MM-DD date")
-        try:
-            return parse_date(value).isoformat()
-        except ValueError:
-            raise FieldError(f"{field} must be a YYYY-MM-DD date") from None
+        return normalize_field_date(field, value)
     if kind == "phases":
         return normalize_phases(value)
+    if kind == "optional_date":
+        return None if value is None else normalize_field_date(field, value)
     if kind == "deliverable_type":
         if value not in DELIVERABLE_TYPES:
             raise FieldError(f"type must be one of {', '.join(DELIVERABLE_TYPES)}")
@@ -90,6 +91,15 @@ def normalize_field(entity_type: str, field: str, value: Any) -> Any:
     raise AssertionError(kind)
 
 
+def normalize_field_date(field: str, value: Any) -> str:
+    if not isinstance(value, str) or len(value) != 10:
+        raise FieldError(f"{field} must be a YYYY-MM-DD date")
+    try:
+        return parse_date(value).isoformat()
+    except ValueError:
+        raise FieldError(f"{field} must be a YYYY-MM-DD date") from None
+
+
 def normalize_phases(value: Any) -> list[dict[str, Any]] | None:
     if value is None:
         return None
@@ -98,8 +108,8 @@ def normalize_phases(value: Any) -> list[dict[str, Any]] | None:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for i, phase in enumerate(value):
-        if not isinstance(phase, dict) or set(phase) - {"name", "days", "gap"}:
-            raise FieldError("each phase must be an object with a name, days (except the last) and an optional gap")
+        if not isinstance(phase, dict) or set(phase) - {"name", "days", "gap", "finished_on"}:
+            raise FieldError("each phase must be an object with a name, days (except the last), and an optional gap and finished_on")
         name = phase.get("name")
         if not isinstance(name, str) or not name.strip():
             raise FieldError("every phase needs a name")
@@ -123,6 +133,8 @@ def normalize_phases(value: Any) -> list[dict[str, Any]] | None:
             raise FieldError(f"the first phase (“{name}”) starts with the deliverable, so it can't have a gap")
         if gap:
             out_phase["gap"] = gap  # 0 is the default and is left out, so there is one way to write each plan
+        if phase.get("finished_on") is not None:
+            out_phase["finished_on"] = normalize_field_date(f"finish date of “{name}”", phase["finished_on"])
         out.append(out_phase)
     return out
 
@@ -152,6 +164,20 @@ def validate_state(state: State) -> list[dict[str, Any]]:
                 needed = fixed_days(d["phases"]) + 1
                 if duration < needed:
                     err("phases_do_not_fit", f"The phases of “{d['name']}” need at least {needed} days, but it lasts {duration}", "deliverable", d["id"])
+            # Phases finish in order.
+            previous: dict[str, Any] | None = None
+            for phase in d["phases"]:
+                if phase.get("finished_on") and previous is not None:
+                    if not previous.get("finished_on"):
+                        err("phase_order", f"“{previous['name']}” of “{d['name']}” must be done before “{phase['name']}”", "deliverable", d["id"])
+                    elif phase["finished_on"] < previous["finished_on"]:
+                        err("phase_order", f"“{phase['name']}” of “{d['name']}” can't finish before “{previous['name']}”", "deliverable", d["id"])
+                previous = phase
+        if d.get("finished_on"):
+            if d["type"] == "milestone":
+                err("invalid_finish", f"Milestone “{d['name']}” can't be marked done", "deliverable", d["id"])
+            elif d.get("phases"):
+                err("invalid_finish", f"“{d['name']}” has phases; mark its phases done instead", "deliverable", d["id"])
 
     seen_pairs: set[tuple[str, str]] = set()
     for dep in state["dependencies"].values():

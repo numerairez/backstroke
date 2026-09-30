@@ -89,7 +89,7 @@ export function CommitDialog(props: Props) {
             <span>Category</span>
             <select value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="">—</option>
-              {props.categories.map((c) => (
+              {props.categories.filter((c) => c.selectable !== false).map((c) => (
                 <option key={c.code} value={c.code} title={c.description}>
                   {c.label}
                 </option>

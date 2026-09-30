@@ -53,6 +53,20 @@ function toPhases({ names, gaps, lengths }: Layout): Phase[] {
   });
 }
 
+/**
+ * Keep finish dates across a plan edit, as the server does: by phase name, or by position when
+ * the number of phases is unchanged (a rename). Plan edits never change progress.
+ */
+export function carryProgress(original: Phase[] | null | undefined, next: Phase[]): Phase[] {
+  const old = original ?? [];
+  const byName = new Map(old.map((p) => [p.name.toLowerCase(), p]));
+  return next.map((p, i) => {
+    const { finished_on: _drop, ...plan } = p;
+    const source = byName.get(p.name.toLowerCase()) ?? (old.length === next.length ? old[i] : undefined);
+    return source?.finished_on ? { ...plan, finished_on: source.finished_on } : plan;
+  });
+}
+
 const fits = (l: Layout) => l.lengths.every((n) => n >= 1) && l.gaps.every((g) => g >= 0);
 
 /** Length of every phase, the last one included. */
@@ -112,8 +126,8 @@ export function refitPhases(d: Dated, start: string, end: string): Phase[] | nul
   const next = { ...l, lengths: [...l.lengths] };
   next.lengths[0] -= daysBetween(d.start_date, start);
   next.lengths[next.lengths.length - 1] = total - sum(next.lengths.slice(0, -1)) - sum(next.gaps);
-  if (fits(next)) return toPhases(next);
-  return toPhases({ names: l.names, gaps: l.names.map(() => 0), lengths: scale(l.lengths, total) });
+  if (fits(next)) return carryProgress(d.phases, toPhases(next));
+  return carryProgress(d.phases, toPhases({ names: l.names, gaps: l.names.map(() => 0), lengths: scale(l.lengths, total) }));
 }
 
 type Moved = { phases: Phase[]; end_date: string };
@@ -130,7 +144,7 @@ export function moveEnd(d: Dated, index: number, delta: number, push: boolean): 
   if (push) {
     const applied = Math.max(delta, 1 - lengths[index]);
     lengths[index] += applied;
-    return { phases: toPhases({ ...l, lengths }), end_date: addDays(d.end_date, applied) };
+    return { phases: carryProgress(d.phases, toPhases({ ...l, lengths })), end_date: addDays(d.end_date, applied) };
   }
   const next = index + 1;
   const room = gaps[next] > 0 ? gaps[next] : lengths[next] - 1;
@@ -138,7 +152,7 @@ export function moveEnd(d: Dated, index: number, delta: number, push: boolean): 
   lengths[index] += applied;
   if (gaps[next] > 0) gaps[next] -= applied;
   else lengths[next] -= applied;
-  return { phases: toPhases({ ...l, gaps, lengths }), end_date: d.end_date };
+  return { phases: carryProgress(d.phases, toPhases({ ...l, gaps, lengths })), end_date: d.end_date };
 }
 
 /**
@@ -152,9 +166,9 @@ export function moveStart(d: Dated, index: number, delta: number, push: boolean)
   const gaps = [...l.gaps];
   const applied = push ? Math.max(delta, -gaps[index]) : Math.min(Math.max(delta, -gaps[index]), lengths[index] - 1);
   gaps[index] += applied;
-  if (push) return { phases: toPhases({ ...l, gaps }), end_date: addDays(d.end_date, applied) };
+  if (push) return { phases: carryProgress(d.phases, toPhases({ ...l, gaps })), end_date: addDays(d.end_date, applied) };
   lengths[index] -= applied;
-  return { phases: toPhases({ ...l, gaps, lengths }), end_date: d.end_date };
+  return { phases: carryProgress(d.phases, toPhases({ ...l, gaps, lengths })), end_date: d.end_date };
 }
 
 /** Remove one phase. Its time goes to a neighbour so the other phases keep their dates. */
@@ -173,7 +187,7 @@ export function removePhase(d: Dated, index: number): Phase[] | null {
   }
   [names, gaps, lengths].forEach((xs) => xs.splice(index, 1));
   gaps[0] = 0;
-  return toPhases({ names, gaps, lengths });
+  return carryProgress(d.phases, toPhases({ names, gaps, lengths }));
 }
 
 /** Append a phase by splitting the last one in two, or null if the last phase is a single day. */
@@ -181,11 +195,14 @@ export function addPhase(d: Dated, name: string): Phase[] | null {
   const l = layout(d);
   const last = l.lengths[l.lengths.length - 1];
   if (last < 2) return null;
-  return toPhases({
-    names: [...l.names, name],
-    gaps: [...l.gaps, 0],
-    lengths: [...l.lengths.slice(0, -1), Math.ceil(last / 2), Math.floor(last / 2)],
-  });
+  return carryProgress(
+    d.phases,
+    toPhases({
+      names: [...l.names, name],
+      gaps: [...l.gaps, 0],
+      lengths: [...l.lengths.slice(0, -1), Math.ceil(last / 2), Math.floor(last / 2)],
+    }),
+  );
 }
 
 export function renamePhase(d: Dated, index: number, name: string): Phase[] {
@@ -201,8 +218,10 @@ export function phaseDeltas(before: Dated | null | undefined, after: Dated): { n
   return a.names.map((name, i) => ({ name, delta: b.lengths[i] - a.lengths[i], gapDelta: b.gaps[i] - a.gaps[i] }));
 }
 
+/** Whether two phase lists plan the same thing (finish dates are progress, not plan). */
 export function samePhases(a: Phase[] | null | undefined, b: Phase[] | null | undefined): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const plan = (xs: Phase[] | null | undefined) => (xs ? xs.map(({ finished_on: _f, ...p }) => p) : null);
+  return JSON.stringify(plan(a)) === JSON.stringify(plan(b));
 }
 
 /** "Dev 12d · 2d gap · Review 3d · UAT 5d" */

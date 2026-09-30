@@ -131,7 +131,8 @@ CHECKOUT_HISTORY = [
             task("pay-142", "pay", "PAY-142 Card vault migration", "2026-09-07", "2026-10-02", phases=dev_review_uat(11, 5)),
             task("pay-151", "pay", "PAY-151 Refund rules engine", "2026-09-21", "2026-10-16", phases=dev_review_uat(14, 3)),
             milestone("pay-ready", "pay", "Payments ready", "2026-10-16"),
-            task("acc-88", "acct", "ACC-88 Login with passkeys", "2026-09-14", "2026-10-16", phases=dev_review_uat(19, 5)),
+            task("security", "acct", "Security review", "2026-09-14", "2026-09-25"),
+            task("acc-88", "acct", "ACC-88 Login with passkeys", "2026-09-14", "2026-10-16", phases=dev_review_uat(13, 5)),
             task("acc-93", "acct", "ACC-93 Account deletion flow", "2026-09-28", "2026-10-20", phases=dev_review_uat(12, 4)),
             task("prototype", "web", "Checkout prototype", "2026-08-31", "2026-09-04"),
             task("web-204", "web", "WEB-204 Checkout page", "2026-09-07", "2026-10-06", phases=dev_review_uat(19, 4)),
@@ -191,6 +192,15 @@ CHECKOUT_HISTORY = [
     ),
 ]
 
+# Status updates recorded with Mark done: (recorded at, deliverable, phase index or None, finished on).
+CHECKOUT_PROGRESS = [
+    ("2026-09-30T10:00:00Z", "vendor", None, "2026-09-03"),
+    ("2026-09-30T10:01:00Z", "prototype", None, "2026-09-09"),
+    ("2026-09-30T10:02:00Z", "pay-142", 0, "2026-09-23"),
+    ("2026-09-30T10:03:00Z", "pay-142", 1, "2026-09-29"),
+    ("2026-09-30T10:04:00Z", "web-204", 0, "2026-09-25"),
+]
+
 
 def seed(session: Session) -> bool:
     if session.scalar(select(Project).limit(1)) is not None:
@@ -218,6 +228,17 @@ def seed(session: Session) -> bool:
         commit_service.create_commit(session, CHECKOUT_ID, author=CHECKOUT_AUTHOR, base_version=version, **commit)
         if version == 0:
             project_service.create_baseline(session, CHECKOUT_ID, "Sprint plan", 1, created_at="2026-09-01T09:05:00Z")
+    for offset, (created_at, deliverable_id, phase, finished_on) in enumerate(CHECKOUT_PROGRESS):
+        commit_service.record_progress(
+            session,
+            CHECKOUT_ID,
+            author=CHECKOUT_AUTHOR,
+            base_version=len(CHECKOUT_HISTORY) + offset,
+            deliverable_id=deliverable_id,
+            phase=phase,
+            finished_on=finished_on,
+            created_at=created_at,
+        )
     return True
 
 

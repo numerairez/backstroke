@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..domain.models import Commit
-from ..domain.phases import phase_deltas
+from ..domain.phases import phase_deltas, phase_spans
+from ..domain.validators import PROGRESS_CATEGORY
 from . import version_service
 from .dependency_service import days_between
 from .history_service import _events_by_commit
@@ -61,8 +62,12 @@ def compute_metrics(session: Session, project_id: str, baseline_version: int | N
             }
         return per_deliverable[d_id]
 
+    finish_plans = _finish_plans(commits, states)
+
     for commit in commits:
         seq = commit.seq_no
+        if commit.category == PROGRESS_CATEGORY:
+            continue  # progress is not a plan change: no churn, slip or commit counts
         after = states[seq]
         category = commit.category or "uncategorized"
         cat = by_category.setdefault(category, {"category": category, "commit_count": 0, "later_days": 0, "earlier_days": 0, "movements": 0})
@@ -154,8 +159,9 @@ def compute_metrics(session: Session, project_id: str, baseline_version: int | N
         "version": version,
         "baseline_version": baseline_version,
         "summary": {
-            "commits": len(commits),
-            "events": sum(len(v) for v in events.values()),
+            # Plan changes only; progress commits are counted in "finishes".
+            "commits": sum(1 for c in commits if c.category != PROGRESS_CATEGORY),
+            "events": sum(len(events[c.id]) for c in commits if c.category != PROGRESS_CATEGORY),
             **totals,
             "net_movement_days": sum(net_values),
             "max_net_movement_days": max(net_values, default=0),
@@ -170,8 +176,58 @@ def compute_metrics(session: Session, project_id: str, baseline_version: int | N
         "by_workstream": sorted(by_workstream.values(), key=lambda w: -w["gross_churn_days"]),
         "propagation": propagation,
         "by_phase": by_phase,
+        "finishes": _finishes(current, baseline, finish_plans),
         "late_stage_window_days": LATE_STAGE_WINDOW_DAYS,
     }
+
+
+def _planned_ends(d: dict[str, Any]) -> dict[str | None, tuple[str, str | None]]:
+    """(planned end, finish date) for the deliverable (key None) or each of its phases (key: name)."""
+    if d.get("phases"):
+        return {s["name"]: (s["end_date"], p.get("finished_on")) for s, p in zip(phase_spans(d), d["phases"])}
+    return {None: (d["end_date"], d.get("finished_on"))}
+
+
+def _finish_plans(commits: list[Commit], states: dict[int, dict[str, Any]]) -> dict[tuple[str, str | None], str]:
+    """The planned end at the moment each finish was recorded, so a later replan can't hide a late finish."""
+    plans: dict[tuple[str, str | None], str] = {}
+    for commit in commits:
+        if commit.category != PROGRESS_CATEGORY:
+            continue
+        before, after = states[commit.seq_no - 1], states[commit.seq_no]
+        for d_id, d in after["deliverables"].items():
+            old = _planned_ends(before["deliverables"].get(d_id) or d)
+            for key, (end, finished) in _planned_ends(d).items():
+                if finished and old.get(key, (None, None))[1] != finished:
+                    plans[(d_id, key)] = end
+    return plans
+
+
+def _finishes(current: dict[str, Any], baseline: dict[str, Any], plans: dict[tuple[str, str | None], str]) -> dict[str, Any]:
+    """Everything finished so far, against the plan when it was marked done and against the baseline."""
+    rows = []
+    for d in sorted(current["deliverables"].values(), key=lambda d: (d["start_date"], d["id"])):
+        base = baseline["deliverables"].get(d["id"])
+        base_ends = _planned_ends(base) if base else {}
+        for key, (end, finished) in _planned_ends(d).items():
+            if not finished:
+                continue
+            planned = plans.get((d["id"], key), end)
+            base_end = base_ends.get(key, (None, None))[0]
+            rows.append(
+                {
+                    "deliverable_id": d["id"],
+                    "name": d["name"],
+                    "phase": key,
+                    "finished_on": finished,
+                    "planned_end": planned,
+                    "delta_days": days_between(planned, finished),
+                    "baseline_end": base_end,
+                    "baseline_delta_days": days_between(base_end, finished) if base_end else None,
+                }
+            )
+    rows.sort(key=lambda r: r["finished_on"], reverse=True)
+    return {"on_time": sum(1 for r in rows if r["delta_days"] <= 0), "total": len(rows), "rows": rows}
 
 
 def _phase_movement(baseline: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:

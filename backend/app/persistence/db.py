@@ -52,10 +52,12 @@ def init_db(engine: Engine) -> None:
 
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
-        # Databases from before deliverable phases need the projection column added.
+        # Databases from before phases and progress need the projection columns added.
         columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(project_deliverable_state)")}
         if "phases" not in columns:
             conn.exec_driver_sql("ALTER TABLE project_deliverable_state ADD COLUMN phases JSON")
+        if "finished_on" not in columns:
+            conn.exec_driver_sql("ALTER TABLE project_deliverable_state ADD COLUMN finished_on VARCHAR")
         for ddl in APPEND_ONLY_TRIGGERS:
             conn.execute(text(ddl))
 

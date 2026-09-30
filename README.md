@@ -54,6 +54,22 @@ Phases are stored on the deliverable as lengths: `[{"name": "Dev", "days": 12}, 
 
 Existing databases get the new projection column on startup. To see Checkout Revamp, reset the demo data.
 
+## Progress
+
+Plans say when work should finish; progress records when it did. Select a bar and use **Mark done** in the Inspector (the finish date defaults to today). For a bar with phases, mark each phase done: phases finish in order, and the bar is done when its last phase is. **Reopen** undoes it (reopening a phase also reopens the ones after it). Milestones aren't marked done.
+
+Status is worked out from the plan, the finish dates and today, and shown on the bar and in the top bar:
+
+| Status | When |
+|---|---|
+| Not started | Today is before the start |
+| In progress | Started, not done, end date not passed |
+| **Behind** | A phase is past its end and not done, but the bar's end date is still ahead: an early warning |
+| **Overdue** | The end date has passed and it isn't done (red hatch from the planned end to today) |
+| Done | Finished; the check sits on the actual date, so a late finish stays visible |
+
+Marking done doesn't move the plan. It's recorded straight away as its own commit (category *Progress*, automatic reason, no staging), so replaying history shows what was done at each version, judged as of that commit's date. Plan commits can't change finish dates, and editing phases keeps them. Progress isn't counted as churn or slip. **Metrics → Finishes vs plan** compares each finish with the plan at the moment it was marked done, and with the baseline.
+
 ## How it works
 
 - **History is the source of truth.** A commit is an ordered list of field-level events (`create` / `update` / `delete`). The current plan is a projection of those events. Every historical version is rebuilt by replaying them.
@@ -85,6 +101,7 @@ frontend/src/
 | `GET /api/projects/{id}/commits/{seq}` | Commit detail and events |
 | `POST /api/projects/{id}/preview` | Dry-run a change set |
 | `POST /api/projects/{id}/commits` | Commit a change set |
+| `POST /api/projects/{id}/progress` | Mark a deliverable or phase done, or reopen it |
 | `POST /api/projects/{id}/commits/{seq}/revert` | Undo as a compensating commit |
 | `GET /api/projects/{id}/diff?from=&to=` | Field-level diff of two versions |
 | `GET/POST /api/projects/{id}/baselines` | Named pointers to commits |

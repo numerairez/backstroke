@@ -1,6 +1,6 @@
 import type { Deliverable, Phase, PlanEvent, PlanState } from "../types";
 import { daysBetween, formatDate, signedDays } from "../state/dates";
-import { phaseDeltas } from "../state/phases";
+import { phaseDeltas, samePhases } from "../state/phases";
 
 const FIELD_LABELS: Record<string, string> = {
   start_date: "start",
@@ -69,12 +69,26 @@ export function describeEvents(events: PlanEvent[], states: PlanState[]): EventL
       lines.push({ key, text: `${name} ${label} ${formatDate(String(e.old_value))} → ${formatDate(String(e.new_value))} (${signedDays(delta)})`, delta });
       return;
     }
+    if (field === "finished_on") {
+      lines.push({ key, text: e.new_value ? `${name} done ${formatDate(String(e.new_value))}` : `${name} reopened` });
+      return;
+    }
     if (field === "phases") {
       // states[0] is the version after the commit, states[1] the one before.
       const after = states[0]?.deliverables.find((d) => d.id === e.entity_id);
       const before = states[1]?.deliverables.find((d) => d.id === e.entity_id) ?? after;
       const oldPhases = e.old_value as Phase[] | null;
       const newPhases = e.new_value as Phase[] | null;
+      // Mark done / Reopen change only finish dates.
+      const finishes = (newPhases ?? []).flatMap((p) => {
+        const was = oldPhases?.find((o) => o.name === p.name)?.finished_on;
+        if (was === p.finished_on) return [];
+        return [p.finished_on ? `${p.name} done ${formatDate(p.finished_on)}` : `${p.name} reopened`];
+      });
+      if (oldPhases && newPhases && samePhases(oldPhases, newPhases)) {
+        lines.push({ key, text: `${name} ${finishes.join(", ") || "phases changed"}` });
+        return;
+      }
       if (!oldPhases) lines.push({ key, text: `${name} broken into ${(newPhases ?? []).map((p) => p.name).join(" · ")}` });
       else if (!newPhases) lines.push({ key, text: `${name} phases removed` });
       else {

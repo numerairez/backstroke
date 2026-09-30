@@ -48,6 +48,35 @@ def phase_spans(deliverable: dict[str, Any]) -> list[dict[str, Any]]:
     return spans
 
 
+def carry_progress(current: list[dict[str, Any]] | None, new: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Copy finish dates from the current phases onto an edited list.
+
+    Plan edits never change progress. A phase keeps its finish date when its name is
+    unchanged, or, when the number of phases is the same, when it was renamed in place.
+    """
+    if new is None:
+        return None
+    old = current or []
+    by_name = {p["name"].casefold(): p for p in old}
+    out = []
+    for i, phase in enumerate(new):
+        kept = {k: v for k, v in phase.items() if k != "finished_on"}
+        source = by_name.get(phase["name"].casefold())
+        if source is None and len(old) == len(new):
+            source = old[i]
+        if source and source.get("finished_on"):
+            kept["finished_on"] = source["finished_on"]
+        out.append(kept)
+    return out
+
+
+def finish_of(deliverable: dict[str, Any]) -> str | None:
+    """When the deliverable was finished: its own date, or its last phase's."""
+    if deliverable.get("phases"):
+        return deliverable["phases"][-1].get("finished_on")
+    return deliverable.get("finished_on")
+
+
 def phase_names(deliverable: dict[str, Any] | None) -> list[str] | None:
     if not deliverable or not deliverable.get("phases"):
         return None
