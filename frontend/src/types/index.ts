@@ -8,6 +8,16 @@ export interface Workstream {
   order_index: number;
 }
 
+/**
+ * A step inside a deliverable. Every phase but the last has `days`; the last runs to the end date.
+ * A phase starts the day after the previous one ends, unless `gap` leaves days free before it.
+ */
+export interface Phase {
+  name: string;
+  days?: number;
+  gap?: number;
+}
+
 export interface Deliverable {
   id: string;
   workstream_id: string;
@@ -15,6 +25,7 @@ export interface Deliverable {
   name: string;
   start_date: string;
   end_date: string;
+  phases?: Phase[] | null;
 }
 
 export interface Dependency {
@@ -126,6 +137,16 @@ export interface DeliverableDiff extends EntityDiff<Deliverable> {
   end_delta_days?: number;
   duration_delta_days?: number;
   lane_change?: { from: string; to: string };
+  phase_deltas?: {
+    name: string;
+    before_days: number;
+    after_days: number;
+    delta_days: number;
+    before_gap_days: number;
+    after_gap_days: number;
+    start_delta_days: number;
+    end_delta_days: number;
+  }[];
 }
 
 export interface Diff {
@@ -179,4 +200,10 @@ export interface Metrics {
   by_category: { category: string; commit_count: number; later_days: number; earlier_days: number; movements: number }[];
   by_workstream: { id: string; name: string; commit_count: number; gross_churn_days: number }[];
   propagation: { seq: number; predecessor_id: string; successor_id: string; predecessor_delta_days: number; successor_delta_days: number }[];
+  by_phase: {
+    compared: number;
+    not_compared: number;
+    phases: { name: string; net_days: number; longer_days: number; shorter_days: number; deliverables: number }[];
+    gaps: { net_days: number; longer_days: number; shorter_days: number };
+  };
 }

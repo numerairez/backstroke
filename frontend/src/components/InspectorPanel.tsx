@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Change, Deliverable, PlanState } from "../types";
 import { addDays, daysBetween, formatDate } from "../state/dates";
+import { DEFAULT_WORKFLOW, addPhase, hasPhases, minDuration, moveEnd, moveStart, phaseSpans, refitPhases, removePhase, renamePhase, splitIntoPhases } from "../state/phases";
 import { newId } from "../state/staging";
 import { LANE_COLORS } from "../timeline/TimelineCanvas";
 
@@ -42,6 +43,132 @@ function CommitOnBlurInput({ value, onCommit, disabled, ...rest }: { value: stri
   );
 }
 
+function PhasesSection({ d, persisted, editable, update }: { d: Deliverable; persisted: Deliverable | undefined; editable: boolean; update: (fields: Record<string, unknown>) => void }) {
+  const spans = phaseSpans(d);
+  if (spans.length === 0) {
+    const split = splitIntoPhases(d);
+    return (
+      <>
+        <h4>Phases</h4>
+        <p className="hint">No phases. Break it into {DEFAULT_WORKFLOW.join(", ")} to plan each step and see which one moves.</p>
+        {editable && (
+          <div className="phase-actions">
+            <button className="small" disabled={!split} onClick={() => split && update({ phases: split })}>
+              Break into phases
+            </button>
+            {!split && <span className="muted small">Needs at least {DEFAULT_WORKFLOW.length} days.</span>}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  const names = spans.map((sp) => sp.name);
+  const wasSpans = persisted && hasPhases(persisted) && persisted.phases.map((p) => p.name).join("\u0000") === names.join("\u0000") ? phaseSpans(persisted) : null;
+  const last = spans[spans.length - 1];
+  const setStart = (i: number, start: string) => update(moveStart(d, i, daysBetween(spans[i].start, start), false));
+  const setDays = (i: number, days: number) => update(moveEnd(d, i, days - spans[i].days, false));
+  const add = () => {
+    let n = names.length + 1;
+    while (names.some((x) => x.toLowerCase() === `phase ${n}`)) n++;
+    const phases = addPhase(d, `Phase ${n}`);
+    if (phases) update({ phases });
+  };
+
+  return (
+    <>
+      <h4>Phases</h4>
+      <ol className="phase-list">
+        {spans.map((sp) => {
+          const isLast = sp.index === spans.length - 1;
+          const prevEnd = sp.index > 0 ? spans[sp.index - 1].end : null;
+          const was = wasSpans?.[sp.index];
+          return (
+            <li key={sp.index}>
+              {sp.gap > 0 && (
+                <div className="phase-gap">
+                  {sp.gap}d gap
+                  {editable && (
+                    <button className="link small" onClick={() => setStart(sp.index, addDays(prevEnd!, 1))}>
+                      Close gap
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="phase-row">
+                <CommitOnBlurInput value={sp.name} disabled={!editable} onCommit={(name) => update({ phases: renamePhase(d, sp.index, name) })} aria-label={`Phase ${sp.index + 1} name`} />
+                {editable && (
+                  <button className="icon" title={names.length <= 2 ? "Remove (leaves one phase, so the bar becomes plain)" : `Remove ${sp.name}`} onClick={() => update({ phases: removePhase(d, sp.index) })}>
+                    ×
+                  </button>
+                )}
+              </div>
+              <div className="phase-dates">
+                <label>
+                  Starts
+                  {sp.index === 0 ? (
+                    <span className="static" title="The first phase starts with the deliverable">
+                      {formatDate(sp.start)}
+                    </span>
+                  ) : (
+                    <input
+                      type="date"
+                      value={sp.start}
+                      min={addDays(prevEnd!, 1)}
+                      max={sp.end}
+                      disabled={!editable}
+                      onChange={(e) => e.target.value && setStart(sp.index, e.target.value)}
+                    />
+                  )}
+                </label>
+                <span className="muted">ends {formatDate(sp.end)}</span>
+                <label className="days">
+                  {isLast || !editable ? (
+                    <span title={isLast ? "The last phase runs to the end date" : undefined}>{sp.days}d</span>
+                  ) : (
+                    <>
+                      <input
+                        type="number"
+                        className="days-input"
+                        min={1}
+                        value={sp.days}
+                        aria-label={`${sp.name} days`}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (Number.isInteger(v) && v >= 1) setDays(sp.index, v);
+                        }}
+                      />
+                      d
+                    </>
+                  )}
+                </label>
+              </div>
+              {was && (was.days !== sp.days || was.start !== sp.start) && (
+                <div className="muted small">
+                  was {formatDate(was.start)} – {formatDate(was.end)} · {was.days}d
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      {editable && (
+        <div className="phase-actions">
+          <button className="small secondary" disabled={last.days < 2} title={last.days < 2 ? "The last phase needs at least 2 days to split" : "Split the last phase in two"} onClick={add}>
+            + Add phase
+          </button>
+          <button className="small secondary" onClick={() => update({ phases: null })}>
+            Remove phases
+          </button>
+        </div>
+      )}
+      <p className="muted small">
+        A phase starts the day after the previous one ends. Set a later start to leave a gap. On the timeline, drag a boundary to move it (the next phase or gap absorbs the change), hold Shift to push the later phases, or hold Alt to open a gap.
+      </p>
+    </>
+  );
+}
+
 function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
   const { state, editable, onStage } = props;
   const update = (fields: Record<string, unknown>) => onStage({ entity_type: "deliverable", entity_id: d.id, operation: "update", fields });
@@ -79,7 +206,7 @@ function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
           disabled={!editable}
           onChange={(e) => {
             const type = e.target.value;
-            update(type === "milestone" ? { type, end_date: d.start_date } : { type, end_date: addDays(d.start_date, 4) });
+            update(type === "milestone" ? { type, end_date: d.start_date, ...(hasPhases(d) ? { phases: null } : {}) } : { type, end_date: addDays(d.start_date, 4) });
           }}
         >
           <option value="task">Task</option>
@@ -103,9 +230,21 @@ function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
         ) : (
           <>
             <label>Start</label>
-            <input type="date" value={d.start_date} max={d.end_date} disabled={!editable} onChange={(e) => e.target.value && update({ start_date: e.target.value })} />
+            <input
+              type="date"
+              value={d.start_date}
+              max={addDays(d.end_date, 1 - minDuration(d))}
+              disabled={!editable}
+              onChange={(e) => e.target.value && update({ start_date: e.target.value, ...(hasPhases(d) ? { phases: refitPhases(d, e.target.value, d.end_date) } : {}) })}
+            />
             <label>End</label>
-            <input type="date" value={d.end_date} min={d.start_date} disabled={!editable} onChange={(e) => e.target.value && update({ end_date: e.target.value })} />
+            <input
+              type="date"
+              value={d.end_date}
+              min={addDays(d.start_date, minDuration(d) - 1)}
+              disabled={!editable}
+              onChange={(e) => e.target.value && update({ end_date: e.target.value, ...(hasPhases(d) ? { phases: refitPhases(d, d.start_date, e.target.value) } : {}) })}
+            />
             <label>Duration</label>
             <div className="static">
               {duration} day{duration === 1 ? "" : "s"}
@@ -116,6 +255,8 @@ function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
           </>
         )}
       </div>
+
+      {d.type === "task" && <PhasesSection d={d} persisted={persisted} editable={editable} update={update} />}
 
       <h4>Depends on</h4>
       <ul className="dep-list">

@@ -40,6 +40,20 @@ Reset the demo data with `cd backend && .venv/bin/python -m app.seed --reset`.
 5. Press **←** to step back to the previous version (read-only, with ghost bars). Press **→** to return.
 6. Click the **Baseline** chip to compare v1 with current, or press **▶** to play back the whole history.
 
+## Phases
+
+A bar can optionally be broken into ordered phases, such as a Jira ticket's Dev, Review and UAT. Bars without phases work exactly as before. The seeded **Checkout Revamp** project mixes both.
+
+- **Add or remove:** select a bar and use **Break into phases** in the Inspector. The same section renames, resizes, adds and removes phases.
+- **Gaps:** a phase starts the day after the previous one ends. Give it a later **Starts** date in the Inspector to leave a gap, for example while the team works on something else. Gaps show as a dotted stretch inside the bar.
+- **Move a boundary:** drag the line between two phases. The next phase, or the gap if there is one, absorbs the change, so the end date holds. Hold **Shift** to push the later phases and the end date instead. Hold **Alt** to move only the next phase's start, opening a gap.
+- **See them:** the arrow after a phased bar lists its phases on rows of their own. **Colour → Phase** in the top bar gives each phase one colour across all lanes, and greys out bars without phases.
+- **Compare:** the thin strip under a bar shows the comparison version's phases. Compare lists each phase's change (for example *Dev +5d, gap before Review +2d*), and **Metrics → Where the time went** adds those changes up per phase since the baseline, with gaps totalled as *between phases*.
+
+Phases are stored on the deliverable as lengths: `[{"name": "Dev", "days": 12}, {"name": "Review", "days": 3, "gap": 2}, {"name": "UAT"}]`. A phase starts the day after the previous one ends plus its optional `gap`, and the last runs to the end date. Moving a bar never changes its phases. Adding, editing or removing phases is an ordinary `phases` field event, so it is staged, committed with a reason and undone like any other edit.
+
+Existing databases get the new projection column on startup. To see Checkout Revamp, reset the demo data.
+
 ## How it works
 
 - **History is the source of truth.** A commit is an ordered list of field-level events (`create` / `update` / `delete`). The current plan is a projection of those events. Every historical version is rebuilt by replaying them.

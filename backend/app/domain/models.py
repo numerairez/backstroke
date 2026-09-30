@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..persistence.db import Base
@@ -110,6 +110,7 @@ class DeliverableState(Base):
     name: Mapped[str] = mapped_column(String)
     start_date: Mapped[str] = mapped_column(String)
     end_date: Mapped[str] = mapped_column(String)
+    phases: Mapped[list | None] = mapped_column(JSON(none_as_null=True), nullable=True)
 
 
 class DependencyState(Base):

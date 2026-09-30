@@ -11,7 +11,8 @@ import { PlaybackControls } from "./history/PlaybackControls";
 import { addDays, formatTimestamp, todayIso } from "./state/dates";
 import { newId, stagedEntityIds } from "./state/staging";
 import { useProject } from "./state/useProject";
-import { TimelineCanvas } from "./timeline/TimelineCanvas";
+import { PHASE_COLORS, phaseNameOrder } from "./state/phases";
+import { TimelineCanvas, type ColorBy } from "./timeline/TimelineCanvas";
 import type { Category, PlanState, Project } from "./types";
 
 type Tab = "inspect" | "changes" | "history" | "compare" | "metrics";
@@ -44,6 +45,8 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [author, setAuthor] = useState(() => stored("backstroke:author", ""));
   const [zoom, setZoom] = useState(() => Number(stored("backstroke:zoom", "2")));
+  const [colorBy, setColorBy] = useState<ColorBy>(() => (stored("backstroke:colorBy", "lane") === "phase" ? "phase" : "lane"));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [tab, setTab] = useState<Tab>("inspect");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewVersion, setViewVersion] = useState<number | null>(null);
@@ -74,9 +77,19 @@ export default function App() {
     setCompare(null);
     setSelectedId(null);
     setPlaying(false);
+    setExpanded(new Set());
   }, [projectId]);
   useEffect(() => store("backstroke:author", author), [author]);
   useEffect(() => store("backstroke:zoom", String(zoom)), [zoom]);
+  useEffect(() => store("backstroke:colorBy", colorBy), [colorBy]);
+  const toggleExpand = useCallback((id: string) => {
+    setExpanded((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const flash = useCallback((msg: string) => {
     setToast(msg);
@@ -234,6 +247,8 @@ export default function App() {
     ? describeEvents(narrated.events, [p.cachedStateAt(narrated.seq), p.cachedStateAt(narrated.seq - 1)].filter(Boolean) as PlanState[])
     : [];
 
+  const phaseNames = useMemo(() => phaseNameOrder(displayed.deliverables), [displayed.deliverables]);
+
   const baseline = p.project?.baselines[0];
   const staged = p.staged.length;
 
@@ -274,6 +289,32 @@ export default function App() {
           <button className="staged-badge" onClick={() => setTab("changes")}>
             <span className="count">{staged}</span> staged · Review & commit
           </button>
+        )}
+        {phaseNames.length > 0 && (
+          <div className="color-by" role="group" aria-label="Colour bars by">
+            <span className="muted small">Colour</span>
+            <div className="seg-toggle">
+              {(["lane", "phase"] as ColorBy[]).map((c) => (
+                <button key={c} aria-pressed={colorBy === c} onClick={() => setColorBy(c)}>
+                  {c === "lane" ? "Lane" : "Phase"}
+                </button>
+              ))}
+            </div>
+            {colorBy === "phase" && (
+              <span className="phase-legend">
+                {phaseNames.map((name, i) => (
+                  <span key={name}>
+                    <i style={{ background: PHASE_COLORS[i % PHASE_COLORS.length] }} />
+                    {name}
+                  </span>
+                ))}
+                <span>
+                  <i style={{ background: "var(--plain-bar)" }} />
+                  No phases
+                </span>
+              </span>
+            )}
+          </div>
         )}
         <div className="zoom" role="group" aria-label="Zoom">
           <button className="icon" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))} title="Zoom out">
@@ -333,6 +374,9 @@ export default function App() {
             conflicts={conflicts}
             selectedId={selectedId}
             focusKey={projectId ?? ""}
+            expanded={expanded}
+            colorBy={colorBy}
+            onToggleExpand={toggleExpand}
             onSelect={select}
             onStage={(c) => {
               p.stage(c);

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain.events import State
+from ..domain.phases import phase_deltas
 from ..domain.validators import FIELD_SPECS
 from .dependency_service import days_between
 
@@ -44,6 +45,9 @@ def diff_states(old: State, new: State) -> dict[str, Any]:
         entry["duration_delta_days"] = _duration(b) - _duration(a)
         if a["workstream_id"] != b["workstream_id"]:
             entry["lane_change"] = {"from": a["workstream_id"], "to": b["workstream_id"]}
+        deltas = phase_deltas(a, b)
+        if deltas is not None:
+            entry["phase_deltas"] = deltas
 
     workstreams = _entity_diffs("workstream", old["workstreams"], new["workstreams"])
     dependencies = _entity_diffs("dependency", old["dependencies"], new["dependencies"])

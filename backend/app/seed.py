@@ -1,7 +1,10 @@
-"""Example project with a short, realistic history.
+"""Example projects with a short, realistic history.
 
-The Appendix A scenario (Data Mapping slipping a week) is left for you to
-perform live: drag Data Mapping +7d and the UI will offer the downstream moves.
+Example Program: the Appendix A scenario (Data Mapping slipping a week) is left for
+you to perform live: drag Data Mapping +7d and the UI will offer the downstream moves.
+
+Checkout Revamp: Jira-style tickets broken into Dev / Review / UAT phases, mixed with
+plain deliverables, and a history in which the phases move.
 
     python -m app.seed          # seed if the database has no projects
     python -m app.seed --reset  # delete the database file and reseed
@@ -26,13 +29,15 @@ def ws(id: str, name: str, order: int) -> Change:
     return Change(entity_type="workstream", entity_id=id, operation="create", fields={"name": name, "order_index": order})
 
 
-def task(id: str, lane: str, name: str, start: str, end: str, type: str = "task") -> Change:
-    return Change(
-        entity_type="deliverable",
-        entity_id=id,
-        operation="create",
-        fields={"workstream_id": lane, "name": name, "type": type, "start_date": start, "end_date": end},
-    )
+def task(id: str, lane: str, name: str, start: str, end: str, type: str = "task", phases: list[dict] | None = None) -> Change:
+    fields = {"workstream_id": lane, "name": name, "type": type, "start_date": start, "end_date": end}
+    if phases:
+        fields["phases"] = phases
+    return Change(entity_type="deliverable", entity_id=id, operation="create", fields=fields)
+
+
+def dev_review_uat(dev: int, review: int) -> list[dict]:
+    return [{"name": "Dev", "days": dev}, {"name": "Review", "days": review}, {"name": "UAT"}]
 
 
 def milestone(id: str, lane: str, name: str, on: str) -> Change:
@@ -43,7 +48,7 @@ def dep(id: str, pred: str, succ: str) -> Change:
     return Change(entity_type="dependency", entity_id=id, operation="create", fields={"predecessor_id": pred, "successor_id": succ})
 
 
-def move(id: str, **fields: str) -> Change:
+def move(id: str, **fields) -> Change:
     return Change(entity_type="deliverable", entity_id=id, operation="update", fields=fields)
 
 
@@ -109,6 +114,83 @@ HISTORY = [
     ),
 ]
 
+CHECKOUT_ID = "checkout-revamp"
+CHECKOUT_AUTHOR = "Sam (Delivery lead)"
+
+CHECKOUT_HISTORY = [
+    dict(
+        created_at="2026-09-01T09:00:00Z",
+        category="other",
+        reference="Sprint planning 2026-09-01",
+        reason="Initial plan: Jira tickets broken into Dev, Review and UAT; vendor and design work tracked as plain deliverables",
+        changes=[
+            ws("pay", "Payments", 0),
+            ws("acct", "Accounts", 1),
+            ws("web", "Web", 2),
+            task("vendor", "pay", "Vendor contract", "2026-08-24", "2026-09-04"),
+            task("pay-142", "pay", "PAY-142 Card vault migration", "2026-09-07", "2026-10-02", phases=dev_review_uat(11, 5)),
+            task("pay-151", "pay", "PAY-151 Refund rules engine", "2026-09-21", "2026-10-16", phases=dev_review_uat(14, 3)),
+            milestone("pay-ready", "pay", "Payments ready", "2026-10-16"),
+            task("acc-88", "acct", "ACC-88 Login with passkeys", "2026-09-14", "2026-10-16", phases=dev_review_uat(19, 5)),
+            task("acc-93", "acct", "ACC-93 Account deletion flow", "2026-09-28", "2026-10-20", phases=dev_review_uat(12, 4)),
+            task("prototype", "web", "Checkout prototype", "2026-08-31", "2026-09-04"),
+            task("web-204", "web", "WEB-204 Checkout page", "2026-09-07", "2026-10-06", phases=dev_review_uat(19, 4)),
+            task("web-219", "web", "WEB-219 Order history", "2026-10-05", "2026-10-30"),
+            milestone("go-live", "web", "Go-Live", "2026-10-30"),
+            dep("c1", "vendor", "pay-142"),
+            dep("c2", "pay-151", "pay-ready"),
+            dep("c3", "prototype", "web-204"),
+            dep("c4", "pay-ready", "go-live"),
+            dep("c5", "acc-93", "go-live"),
+            dep("c6", "web-219", "go-live"),
+        ],
+    ),
+    dict(
+        created_at="2026-09-18T15:30:00Z",
+        category="estimate",
+        reference="PAY-142",
+        reason="Vault API rate limits needed a batching layer: Dev +5d. UAT compressed by 2d to limit the slip",
+        changes=[move("pay-142", end_date="2026-10-06", phases=dev_review_uat(16, 6))],
+    ),
+    dict(
+        created_at="2026-09-22T10:00:00Z",
+        category="dependency",
+        reference="PAY-151",
+        reason="Refund rules reuse the new vault batching layer, so PAY-151 Dev waits a week for PAY-142",
+        changes=[
+            move("pay-151", end_date="2026-10-23", phases=dev_review_uat(21, 3)),
+            move("pay-ready", start_date="2026-10-23", end_date="2026-10-23"),
+        ],
+    ),
+    dict(
+        created_at="2026-09-25T14:10:00Z",
+        category="approval",
+        reference="A11y review WEB-204",
+        reason="Accessibility sign-off added a day to Review; UAT extended to retest the fixes",
+        changes=[move("web-204", end_date="2026-10-09", phases=dev_review_uat(19, 5))],
+    ),
+    dict(
+        created_at="2026-09-29T11:45:00Z",
+        category="scope",
+        reference="WEB-219",
+        reason="Order history gained a CSV export; broken into phases so the extra Dev and UAT are visible",
+        changes=[move("web-219", phases=dev_review_uat(16, 3))],
+    ),
+    dict(
+        created_at="2026-09-30T09:20:00Z",
+        category="resource",
+        reference="ACC-93",
+        reason="Reviewers are on release duty for two days, so ACC-93 Review starts two days after Dev ends",
+        changes=[
+            move(
+                "acc-93",
+                end_date="2026-10-22",
+                phases=[{"name": "Dev", "days": 12}, {"name": "Review", "days": 4, "gap": 2}, {"name": "UAT"}],
+            )
+        ],
+    ),
+]
+
 
 def seed(session: Session) -> bool:
     if session.scalar(select(Project).limit(1)) is not None:
@@ -124,6 +206,18 @@ def seed(session: Session) -> bool:
         commit_service.create_commit(session, PROJECT_ID, author=AUTHOR, base_version=version, **commit)
         if version == 0:
             project_service.create_baseline(session, PROJECT_ID, "v1.0 Kickoff baseline", 1, created_at="2026-08-24T10:00:00Z")
+
+    project_service.create_project(
+        session,
+        "Checkout Revamp",
+        "Jira tickets with Dev / Review / UAT phases alongside plain deliverables.",
+        project_id=CHECKOUT_ID,
+        created_at="2026-09-01T08:30:00Z",
+    )
+    for version, commit in enumerate(CHECKOUT_HISTORY):
+        commit_service.create_commit(session, CHECKOUT_ID, author=CHECKOUT_AUTHOR, base_version=version, **commit)
+        if version == 0:
+            project_service.create_baseline(session, CHECKOUT_ID, "Sprint plan", 1, created_at="2026-09-01T09:05:00Z")
     return True
 
 

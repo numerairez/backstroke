@@ -22,6 +22,10 @@ ENTITY_COLLECTIONS = {
 }
 OPERATIONS = ("create", "update", "delete")
 
+# Fields added after an entity type first shipped. Create events written before then
+# lack them, so replay fills in the default and old and new history fold alike.
+BACKFILL: dict[str, dict[str, Any]] = {"deliverable": {"phases": None}}
+
 State = dict[str, dict[str, dict[str, Any]]]
 
 
@@ -61,7 +65,7 @@ def apply_event(state: State, event: Event) -> None:
     if event.operation == "create":
         if entity_id in collection:
             raise ReplayError(f"{event.entity_type} {entity_id} already exists")
-        collection[entity_id] = {"id": entity_id, **copy.deepcopy(event.new_value)}
+        collection[entity_id] = {"id": entity_id, **BACKFILL.get(event.entity_type, {}), **copy.deepcopy(event.new_value)}
     elif event.operation == "update":
         if entity_id not in collection:
             raise ReplayError(f"{event.entity_type} {entity_id} does not exist")

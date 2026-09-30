@@ -3,6 +3,7 @@
 
 import type { Change, Deliverable, Dependency, EntityType, PlanState, Workstream } from "../types";
 import { daysBetween, formatDate, signedDays } from "./dates";
+import { describePhases, hasPhases } from "./phases";
 
 const COLLECTION = { workstream: "workstreams", deliverable: "deliverables", dependency: "dependencies" } as const;
 
@@ -15,6 +16,11 @@ export function newId(entityType: EntityType): string {
 
 function find(state: PlanState, type: EntityType, id: string): Entity | undefined {
   return (state[COLLECTION[type]] as Entity[]).find((e) => e.id === id);
+}
+
+/** Field values are strings, numbers, null or (for phases) plain JSON. */
+function sameValue(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 function referencesDeliverable(change: Change, deliverableId: string): boolean {
@@ -41,7 +47,7 @@ export function stageChange(staged: Change[], change: Change, persisted: PlanSta
     const base = find(persisted, type, id) as Record<string, unknown> | undefined;
     const merged = { ...(existing?.fields ?? {}), ...change.fields };
     for (const [key, value] of Object.entries(merged)) {
-      if (base && base[key] === value) delete merged[key];
+      if (base && sameValue(base[key], value)) delete merged[key];
     }
     const rest = staged.filter((c) => !sameEntity(c));
     if (Object.keys(merged).length === 0) return rest;
@@ -163,6 +169,14 @@ export function describeChange(change: Change, persisted: PlanState, proposed: P
   for (const [field, value] of Object.entries(fields)) {
     if (isMilestone && field === "end_date" && "start_date" in fields) continue;
     const old = before?.[field];
+    if (field === "phases") {
+      const oldD = before as unknown as Deliverable;
+      const newD = (find(proposed, type, id) ?? before) as Deliverable;
+      if (!hasPhases(oldD)) lines.push(`broken into ${describePhases(newD)}`);
+      else if (!hasPhases(newD)) lines.push("phases removed");
+      else lines.push(`phases: ${describePhases(oldD)} → ${describePhases(newD)}`);
+      continue;
+    }
     const label = isMilestone && field === "start_date" ? "date" : (FIELD_LABELS[field] ?? field);
     let line = `${label}: ${formatValue(persisted, field, old)} → ${formatValue(proposed, field, value)}`;
     if (field.endsWith("_date") && typeof old === "string" && typeof value === "string") {

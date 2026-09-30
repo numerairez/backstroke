@@ -71,6 +71,54 @@ function ReasonAttribution({ rows, categories }: { rows: Metrics["by_category"];
   );
 }
 
+/** Where the time went: how much longer or shorter each phase got since the baseline. */
+function PhaseMovement({ data }: { data: Metrics["by_phase"] }) {
+  const gaps = data.gaps;
+  const rows = [
+    ...data.phases.filter((p) => p.longer_days || p.shorter_days),
+    // Gaps are time between phases, spent on other work.
+    ...(gaps.longer_days || gaps.shorter_days ? [{ name: "Gaps", ...gaps, deliverables: data.compared, isGap: true }] : []),
+  ];
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.longer_days, r.shorter_days)));
+  return (
+    <>
+      {rows.length === 0 ? (
+        <p className="hint">No phase has changed length since the baseline.</p>
+      ) : (
+        <div className="attribution" role="table" aria-label="Change in phase length">
+          <div className="legend">
+            <span>
+              <i className="swatch earlier" /> got shorter
+            </span>
+            <span>
+              <i className="swatch later" /> got longer
+            </span>
+          </div>
+          {rows.map((r) => (
+            <div key={r.name} role="row" className="attr-row" title={`${r.deliverables} deliverable${r.deliverables === 1 ? "" : "s"} · net ${signedDays(r.net_days)}`}>
+              <span role="rowheader" className={`attr-label ${"isGap" in r ? "muted" : ""}`}>
+                {"isGap" in r ? <i>between phases</i> : r.name}
+              </span>
+              <span className="attr-bars">
+                <span className="half left">{r.shorter_days > 0 && <span className="bar earlier" style={{ width: `${(r.shorter_days / max) * 100}%` }} />}</span>
+                <span className="half right">{r.longer_days > 0 && <span className="bar later" style={{ width: `${(r.longer_days / max) * 100}%` }} />}</span>
+              </span>
+              <span role="cell" className="attr-values">
+                {r.shorter_days > 0 && <span>−{r.shorter_days}d</span>}
+                {r.longer_days > 0 && <span>+{r.longer_days}d</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="muted small">
+        Change in phase length across the {data.compared} deliverable{data.compared === 1 ? "" : "s"} that had the same phases at the baseline.
+        {data.not_compared > 0 && ` ${data.not_compared} other${data.not_compared === 1 ? " was" : "s were"} added or re-phased since, so ${data.not_compared === 1 ? "it isn't" : "they aren't"} counted.`}
+      </p>
+    </>
+  );
+}
+
 export function MetricsPanel({ projectId, version, baselines, categories, onSelect }: Props) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [baseline, setBaseline] = useState<number | undefined>(undefined);
@@ -139,6 +187,13 @@ export function MetricsPanel({ projectId, version, baselines, categories, onSele
           ))}
         </tbody>
       </table>
+
+      {metrics.by_phase.compared + metrics.by_phase.not_compared > 0 && (
+        <>
+          <h4>Where the time went</h4>
+          <PhaseMovement data={metrics.by_phase} />
+        </>
+      )}
 
       <h4>Movement by reason</h4>
       <ReasonAttribution rows={metrics.by_category} categories={categories} />

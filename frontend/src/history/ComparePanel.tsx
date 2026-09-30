@@ -127,7 +127,17 @@ export function ComparePanel({ projectId, commits, baselines, version, range, on
                   {moved.map((d) => {
                     const a = d.before!;
                     const b = d.after!;
-                    const extra = (d.changes ?? []).filter((c) => !c.field.endsWith("_date")).map((c) => (c.field === "workstream_id" ? "lane changed" : `${c.field}: ${String(c.old)} → ${String(c.new)}`));
+                    const extra = (d.changes ?? [])
+                      .filter((c) => !c.field.endsWith("_date") && !(c.field === "phases" && d.phase_deltas))
+                      .map((c) => {
+                        if (c.field === "workstream_id") return "lane changed";
+                        if (c.field === "phases") return !c.old ? "broken into phases" : !c.new ? "phases removed" : "phases renamed or reordered";
+                        return `${c.field}: ${String(c.old)} → ${String(c.new)}`;
+                      });
+                    const phaseMoves = (d.phase_deltas ?? []).flatMap((x) => {
+                      const gap = x.after_gap_days - x.before_gap_days;
+                      return [...(gap ? [{ key: `gap-${x.name}`, text: `gap before ${x.name}`, delta: gap }] : []), ...(x.delta_days ? [{ key: x.name, text: x.name, delta: x.delta_days }] : [])];
+                    });
                     return (
                       <tr key={d.id}>
                         <td>
@@ -135,6 +145,15 @@ export function ComparePanel({ projectId, commits, baselines, version, range, on
                             {b.name}
                           </button>
                           {!!d.duration_delta_days && <div className="muted small">duration {signedDays(d.duration_delta_days)}</div>}
+                          {phaseMoves.length > 0 && (
+                            <div className="small phase-moves">
+                              {phaseMoves.map((x) => (
+                                <span key={x.key} className={x.delta > 0 ? "later" : "earlier"}>
+                                  {x.text} {signedDays(x.delta)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           {extra.map((x) => (
                             <div key={x} className="muted small">
                               {x}

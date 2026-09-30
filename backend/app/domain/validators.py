@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any
 
 from .events import State
+from .phases import MIN_PHASES, fixed_days
 
 DELIVERABLE_TYPES = ("task", "milestone")
 DEPENDENCY_TYPES = ("FS",)
@@ -19,12 +20,13 @@ FIELD_SPECS: dict[str, dict[str, str]] = {
         "name": "name",
         "start_date": "date",
         "end_date": "date",
+        "phases": "phases",
     },
     "dependency": {"predecessor_id": "ref", "successor_id": "ref", "type": "dependency_type"},
 }
 FIELD_DEFAULTS: dict[str, dict[str, Any]] = {
     "workstream": {},
-    "deliverable": {"type": "task"},
+    "deliverable": {"type": "task", "phases": None},
     "dependency": {"type": "FS"},
 }
 
@@ -75,6 +77,8 @@ def normalize_field(entity_type: str, field: str, value: Any) -> Any:
             return parse_date(value).isoformat()
         except ValueError:
             raise FieldError(f"{field} must be a YYYY-MM-DD date") from None
+    if kind == "phases":
+        return normalize_phases(value)
     if kind == "deliverable_type":
         if value not in DELIVERABLE_TYPES:
             raise FieldError(f"type must be one of {', '.join(DELIVERABLE_TYPES)}")
@@ -84,6 +88,43 @@ def normalize_field(entity_type: str, field: str, value: Any) -> Any:
             raise FieldError(f"dependency type must be one of {', '.join(DEPENDENCY_TYPES)}")
         return value
     raise AssertionError(kind)
+
+
+def normalize_phases(value: Any) -> list[dict[str, Any]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) < MIN_PHASES:
+        raise FieldError(f"phases must be null or a list of at least {MIN_PHASES} phases")
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for i, phase in enumerate(value):
+        if not isinstance(phase, dict) or set(phase) - {"name", "days", "gap"}:
+            raise FieldError("each phase must be an object with a name, days (except the last) and an optional gap")
+        name = phase.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise FieldError("every phase needs a name")
+        name = name.strip()
+        if name.casefold() in seen:
+            raise FieldError(f"phase names must be unique; “{name}” appears twice")
+        seen.add(name.casefold())
+        out_phase: dict[str, Any] = {"name": name}
+        days = phase.get("days")
+        if i == len(value) - 1:
+            if days is not None:
+                raise FieldError(f"the last phase (“{name}”) runs to the end date, so it takes no days")
+        else:
+            if isinstance(days, bool) or not isinstance(days, int) or days < 1:
+                raise FieldError(f"phase “{name}” needs a whole number of days, at least 1")
+            out_phase["days"] = days
+        gap = phase.get("gap", 0)
+        if isinstance(gap, bool) or not isinstance(gap, int) or gap < 0:
+            raise FieldError(f"the gap before “{name}” must be a whole number of days, 0 or more")
+        if gap and i == 0:
+            raise FieldError(f"the first phase (“{name}”) starts with the deliverable, so it can't have a gap")
+        if gap:
+            out_phase["gap"] = gap  # 0 is the default and is left out, so there is one way to write each plan
+        out.append(out_phase)
+    return out
 
 
 def validate_state(state: State) -> list[dict[str, Any]]:
@@ -103,6 +144,14 @@ def validate_state(state: State) -> list[dict[str, Any]]:
             err("invalid_dates", f"“{d['name']}” ends before it starts", "deliverable", d["id"])
         if d["type"] == "milestone" and d["start_date"] != d["end_date"]:
             err("invalid_milestone", f"Milestone “{d['name']}” must start and end on the same date", "deliverable", d["id"])
+        if d.get("phases"):
+            if d["type"] == "milestone":
+                err("invalid_phases", f"Milestone “{d['name']}” can't have phases", "deliverable", d["id"])
+            elif d["start_date"] <= d["end_date"]:
+                duration = (parse_date(d["end_date"]) - parse_date(d["start_date"])).days + 1
+                needed = fixed_days(d["phases"]) + 1
+                if duration < needed:
+                    err("phases_do_not_fit", f"The phases of “{d['name']}” need at least {needed} days, but it lasts {duration}", "deliverable", d["id"])
 
     seen_pairs: set[tuple[str, str]] = set()
     for dep in state["dependencies"].values():

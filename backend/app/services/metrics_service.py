@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..domain.models import Commit
+from ..domain.phases import phase_deltas
 from . import version_service
 from .dependency_service import days_between
 from .history_service import _events_by_commit
@@ -141,6 +142,8 @@ def compute_metrics(session: Session, project_id: str, baseline_version: int | N
         )
     deliverables_out.sort(key=lambda d: (-(d["gross_churn_days"]), d["name"]))
 
+    by_phase = _phase_movement(baseline, current)
+
     net_values = [d["net_movement_days"] for d in deliverables_out if d["net_movement_days"] is not None]
     milestones = [d for d in deliverables_out if d["type"] == "milestone"]
     for ws_id, ws in by_workstream.items():
@@ -166,5 +169,39 @@ def compute_metrics(session: Session, project_id: str, baseline_version: int | N
         "by_category": sorted(by_category.values(), key=lambda c: -(c["later_days"] + c["earlier_days"])),
         "by_workstream": sorted(by_workstream.values(), key=lambda w: -w["gross_churn_days"]),
         "propagation": propagation,
+        "by_phase": by_phase,
         "late_stage_window_days": LATE_STAGE_WINDOW_DAYS,
     }
+
+
+def _phase_movement(baseline: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Where the time went: change in each phase's length since the baseline.
+
+    Gaps between phases (time spent on other work) are totalled separately.
+
+    Only deliverables whose phases are the same in both versions can be compared
+    phase by phase. The rest (no phases, added later, or re-phased) are counted so
+    the UI can say what was left out.
+    """
+    phases: dict[str, dict[str, Any]] = {}
+    gaps = {"net_days": 0, "longer_days": 0, "shorter_days": 0}
+    compared = not_compared = 0
+    for d in sorted(current["deliverables"].values(), key=lambda d: (d["start_date"], d["id"])):
+        if not d.get("phases"):
+            continue
+        deltas = phase_deltas(baseline["deliverables"].get(d["id"]), d)
+        if deltas is None:
+            not_compared += 1
+            continue
+        compared += 1
+        for p in deltas:
+            row = phases.setdefault(p["name"], {"name": p["name"], "net_days": 0, "longer_days": 0, "shorter_days": 0, "deliverables": 0})
+            row["net_days"] += p["delta_days"]
+            row["longer_days"] += max(0, p["delta_days"])
+            row["shorter_days"] += max(0, -p["delta_days"])
+            row["deliverables"] += 1
+            gap_delta = p["after_gap_days"] - p["before_gap_days"]
+            gaps["net_days"] += gap_delta
+            gaps["longer_days"] += max(0, gap_delta)
+            gaps["shorter_days"] += max(0, -gap_delta)
+    return {"compared": compared, "not_compared": not_compared, "phases": list(phases.values()), "gaps": gaps}

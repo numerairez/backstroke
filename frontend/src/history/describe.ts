@@ -1,5 +1,6 @@
-import type { PlanEvent, PlanState } from "../types";
+import type { Deliverable, Phase, PlanEvent, PlanState } from "../types";
 import { daysBetween, formatDate, signedDays } from "../state/dates";
+import { phaseDeltas } from "../state/phases";
 
 const FIELD_LABELS: Record<string, string> = {
   start_date: "start",
@@ -66,6 +67,24 @@ export function describeEvents(events: PlanEvent[], states: PlanState[]): EventL
       const delta = daysBetween(String(e.old_value), String(e.new_value));
       const label = isMilestone ? "date" : FIELD_LABELS[field];
       lines.push({ key, text: `${name} ${label} ${formatDate(String(e.old_value))} → ${formatDate(String(e.new_value))} (${signedDays(delta)})`, delta });
+      return;
+    }
+    if (field === "phases") {
+      // states[0] is the version after the commit, states[1] the one before.
+      const after = states[0]?.deliverables.find((d) => d.id === e.entity_id);
+      const before = states[1]?.deliverables.find((d) => d.id === e.entity_id) ?? after;
+      const oldPhases = e.old_value as Phase[] | null;
+      const newPhases = e.new_value as Phase[] | null;
+      if (!oldPhases) lines.push({ key, text: `${name} broken into ${(newPhases ?? []).map((p) => p.name).join(" · ")}` });
+      else if (!newPhases) lines.push({ key, text: `${name} phases removed` });
+      else {
+        const deltas = before && after ? phaseDeltas({ ...before, phases: oldPhases } as Deliverable, { ...after, phases: newPhases } as Deliverable) : null;
+        const parts = (deltas ?? []).flatMap((p) => [
+          ...(p.gapDelta ? [`gap before ${p.name} ${signedDays(p.gapDelta)}`] : []),
+          ...(p.delta ? [`${p.name} ${signedDays(p.delta)}`] : []),
+        ]);
+        lines.push({ key, text: parts.length ? `${name} ${parts.join(", ")}` : `${name} phases changed` });
+      }
       return;
     }
     if (field === "workstream_id") {

@@ -8,6 +8,7 @@ export const LANE_PADDING = 8;
 export const BAR_HEIGHT = 20;
 export const HEADER_HEIGHT = 50;
 export const EMPTY_LANE_ROWS = 1;
+export const PHASE_ROW_HEIGHT = 20;
 
 export type ItemStatus = "same" | "changed" | "added" | "removed";
 
@@ -20,6 +21,7 @@ export interface TimelineItem {
   endDelta: number;
   laneChanged: boolean;
   rowY: number; // top of row
+  phaseRows: number; // phases listed on their own rows beneath the bar (0 when collapsed)
 }
 
 export interface TimelineLane {
@@ -47,6 +49,8 @@ export interface ModelInput {
   ghost: PlanState | null;
   /** Deliverable order within lanes; keeps rows stable while items are being dragged. */
   order: string[];
+  /** Deliverables whose phases are opened onto rows of their own. */
+  expanded?: Set<string>;
   dayWidth: number;
   today: string;
 }
@@ -61,7 +65,7 @@ function nextMonthStart(day: number): number {
   return toDay(m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`);
 }
 
-export function buildTimelineModel({ state, ghost, order, dayWidth, today }: ModelInput): TimelineModel {
+export function buildTimelineModel({ state, ghost, order, expanded, dayWidth, today }: ModelInput): TimelineModel {
   const ghostById = new Map((ghost?.deliverables ?? []).map((d) => [d.id, d]));
   const currentById = new Map(state.deliverables.map((d) => [d.id, d]));
 
@@ -95,7 +99,8 @@ export function buildTimelineModel({ state, ghost, order, dayWidth, today }: Mod
     }
     members.sort((a, b) => sortKey(a.deliverable) - sortKey(b.deliverable) || a.deliverable.start_date.localeCompare(b.deliverable.start_date) || a.deliverable.id.localeCompare(b.deliverable.id));
 
-    const laneItems: TimelineItem[] = members.map((m, i) => {
+    let rowY = y + LANE_PADDING;
+    const laneItems: TimelineItem[] = members.map((m) => {
       const g = m.ghost;
       let status: ItemStatus = "same";
       if (ghost && m.removedItem) status = "removed";
@@ -109,12 +114,14 @@ export function buildTimelineModel({ state, ghost, order, dayWidth, today }: Mod
         startDelta: g && status === "changed" ? daysBetween(g.start_date, m.deliverable.start_date) : 0,
         endDelta: g && status === "changed" ? daysBetween(g.end_date, m.deliverable.end_date) : 0,
         laneChanged: !!g && g.workstream_id !== m.deliverable.workstream_id,
-        rowY: y + LANE_PADDING + i * ROW_HEIGHT,
+        rowY,
+        phaseRows: status !== "removed" && expanded?.has(m.deliverable.id) ? (m.deliverable.phases?.length ?? 0) : 0,
       };
+      rowY += ROW_HEIGHT + item.phaseRows * PHASE_ROW_HEIGHT + (item.phaseRows ? 6 : 0);
       items.set(item.id, item);
       return item;
     });
-    const height = LANE_PADDING * 2 + Math.max(laneItems.length, EMPTY_LANE_ROWS) * ROW_HEIGHT;
+    const height = Math.max(rowY - y + LANE_PADDING, LANE_PADDING * 2 + EMPTY_LANE_ROWS * ROW_HEIGHT);
     lanes.push({ workstream, removed, y, height, items: laneItems });
     y += height;
   }

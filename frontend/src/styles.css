@@ -27,6 +27,7 @@
   --grid: #e6e5e0;
   --today: #e34948;
   --ghost: #8a8983;
+  --plain-bar: #b4b3ab;
   --shadow: 0 8px 30px rgba(20, 20, 18, 0.12);
   --radius: 8px;
   color-scheme: light;
@@ -62,6 +63,7 @@
     --grid: #2c2c29;
     --today: #e66767;
     --ghost: #9c9b93;
+    --plain-bar: #5c5b55;
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }
@@ -1359,4 +1361,213 @@ td.earlier {
   z-index: 60;
   max-width: calc(100vw - 32px);
   animation: rise 200ms ease-out;
+}
+
+/* --- Phases inside a deliverable ------------------------------------------------ */
+.item.phased .shape {
+  fill: transparent;
+}
+.item.phased:not(.selected):not(.staged):not(.conflict):not(.removed) .shape {
+  stroke: transparent;
+}
+.item .seg-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.item .seg-label.solid {
+  fill: #fff;
+}
+.item .seg-label.tint {
+  fill: var(--text);
+}
+.item .seg-gap {
+  fill: var(--bar);
+  fill-opacity: 0.1;
+}
+.item .seg-gap-line {
+  stroke: var(--bar);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 3;
+}
+.item .seg-sep {
+  stroke: var(--surface);
+  stroke-width: 1.5;
+}
+.item.staged .segments {
+  opacity: 0.4;
+}
+.item.removed .segments {
+  opacity: 0.2;
+}
+.item .handle.boundary {
+  cursor: col-resize;
+}
+.item .handle.boundary:hover {
+  fill: var(--text);
+  fill-opacity: 0.22;
+}
+.phase-toggle {
+  cursor: pointer;
+}
+.phase-toggle rect {
+  fill: transparent;
+}
+.phase-toggle:hover rect {
+  fill: var(--surface-3);
+}
+.phase-toggle path {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ghost-phase {
+  opacity: 0.55;
+  pointer-events: auto;
+}
+.phase-rows {
+  pointer-events: none;
+}
+.phase-guide {
+  stroke: var(--border-strong);
+}
+.phase-row-ghost {
+  fill: none;
+  stroke: var(--ghost);
+  stroke-dasharray: 3 2;
+}
+.phase-row-label {
+  font-size: 11px;
+  fill: var(--muted);
+}
+.phase-row-label .later {
+  fill: var(--later);
+  font-weight: 600;
+}
+.phase-row-label .earlier {
+  fill: var(--earlier);
+  font-weight: 600;
+}
+
+.color-by {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.seg-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg-toggle button {
+  border: none;
+  border-radius: 0;
+  padding: 3px 9px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--text-2);
+}
+.seg-toggle button[aria-pressed="true"] {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+.phase-legend {
+  display: inline-flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.phase-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.phase-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.phase-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.phase-list > li {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.phase-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.phase-row input {
+  flex: 1;
+  font-weight: 600;
+  padding: 3px 6px;
+}
+.phase-dates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.phase-dates label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+.phase-dates input[type="date"] {
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.phase-dates .days {
+  margin-left: auto;
+}
+.phase-dates .days-input {
+  width: 52px;
+  padding: 2px 4px;
+  text-align: right;
+}
+.phase-gap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  justify-self: start;
+}
+.phase-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.phase-moves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.phase-moves .later {
+  color: var(--later);
+}
+.phase-moves .earlier {
+  color: var(--earlier);
 }
