@@ -284,84 +284,87 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+          <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true">
             <rect x="3" y="7" width="18" height="6" rx="2" fill="var(--accent)" />
             <rect x="11" y="19" width="18" height="6" rx="2" fill="var(--accent-soft)" />
           </svg>
           Backstroke
+          <span className="tagline">Plan forward. Look back.</span>
         </div>
-        <select className="project-select" value={projectId ?? ""} onChange={(e) => setProjectId(e.target.value || null)} aria-label="Project">
-          {projects.map((x) => (
-            <option key={x.id} value={x.id}>
-              {x.name}
-            </option>
-          ))}
-        </select>
-        <button className="small secondary" onClick={newProject}>
-          New project
-        </button>
-        <div className="versions">
-          {baseline && (
-            <button className="version-chip" title="Compare baseline with current" onClick={() => (setCompare({ from: baseline.version, to: p.version }), setViewVersion(null), setTab("compare"))}>
-              Baseline: <b>{baseline.name}</b> (#{baseline.version})
+        <div className="toolbar">
+          <select className="project-select" value={projectId ?? ""} onChange={(e) => setProjectId(e.target.value || null)} aria-label="Project">
+            {projects.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+          <button className="small secondary" onClick={newProject}>
+            New project
+          </button>
+          <div className="versions">
+            {baseline && (
+              <button className="version-chip" title="Compare baseline with current" onClick={() => (setCompare({ from: baseline.version, to: p.version }), setViewVersion(null), setTab("compare"))}>
+                Baseline: <b>{baseline.name}</b> (#{baseline.version})
+              </button>
+            )}
+            <span className="version-chip">
+              Current: <b>#{p.version}</b>
+            </span>
+          </div>
+          <div className="status-counts" title={`Status as of ${asOf}`}>
+            {statusCounts.done > 0 && <span className="st done">{statusCounts.done} done</span>}
+            {statusCounts.progress > 0 && <span className="st">{statusCounts.progress} in progress</span>}
+            {statusCounts.behind > 0 && <span className="st behind">{statusCounts.behind} behind</span>}
+            {statusCounts.overdue > 0 && <span className="st overdue">{statusCounts.overdue} overdue</span>}
+            {statusCounts.todo > 0 && <span className="st">{statusCounts.todo} not started</span>}
+          </div>
+          <div className="spacer" />
+          {staged > 0 && (
+            <button className="staged-badge" onClick={() => setTab("changes")}>
+              <span className="count">{staged}</span> staged · Review & commit
             </button>
           )}
-          <span className="version-chip">
-            Current: <b>#{p.version}</b>
-          </span>
-        </div>
-        <div className="status-counts" title={`Status as of ${asOf}`}>
-          {statusCounts.done > 0 && <span className="st done">{statusCounts.done} done</span>}
-          {statusCounts.progress > 0 && <span className="st">{statusCounts.progress} in progress</span>}
-          {statusCounts.behind > 0 && <span className="st behind">{statusCounts.behind} behind</span>}
-          {statusCounts.overdue > 0 && <span className="st overdue">{statusCounts.overdue} overdue</span>}
-          {statusCounts.todo > 0 && <span className="st">{statusCounts.todo} not started</span>}
-        </div>
-        <div className="spacer" />
-        {staged > 0 && (
-          <button className="staged-badge" onClick={() => setTab("changes")}>
-            <span className="count">{staged}</span> staged · Review & commit
-          </button>
-        )}
-        {phaseNames.length > 0 && (
-          <div className="color-by" role="group" aria-label="Colour bars by">
-            <span className="muted small">Colour</span>
-            <div className="seg-toggle">
-              {(["lane", "phase"] as ColorBy[]).map((c) => (
-                <button key={c} aria-pressed={colorBy === c} onClick={() => setColorBy(c)}>
-                  {c === "lane" ? "Lane" : "Phase"}
-                </button>
-              ))}
-            </div>
-            {colorBy === "phase" && (
-              <span className="phase-legend">
-                {phaseNames.map((name, i) => (
-                  <span key={name}>
-                    <i style={{ background: PHASE_COLORS[i % PHASE_COLORS.length] }} />
-                    {name}
-                  </span>
+          {phaseNames.length > 0 && (
+            <div className="color-by" role="group" aria-label="Colour bars by">
+              <span className="muted small">Colour</span>
+              <div className="seg-toggle">
+                {(["lane", "phase"] as ColorBy[]).map((c) => (
+                  <button key={c} aria-pressed={colorBy === c} onClick={() => setColorBy(c)}>
+                    {c === "lane" ? "Lane" : "Phase"}
+                  </button>
                 ))}
-                <span>
-                  <i style={{ background: "var(--plain-bar)" }} />
-                  No phases
+              </div>
+              {colorBy === "phase" && (
+                <span className="phase-legend">
+                  {phaseNames.map((name, i) => (
+                    <span key={name}>
+                      <i style={{ background: PHASE_COLORS[i % PHASE_COLORS.length] }} />
+                      {name}
+                    </span>
+                  ))}
+                  <span>
+                    <i style={{ background: "var(--plain-bar)" }} />
+                    No phases
+                  </span>
                 </span>
-              </span>
-            )}
+              )}
+            </div>
+          )}
+          <div className="zoom" role="group" aria-label="Zoom">
+            <button className="icon" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))} title="Zoom out">
+              −
+            </button>
+            <button className="icon" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} title="Zoom in">
+              +
+            </button>
           </div>
-        )}
-        <div className="zoom" role="group" aria-label="Zoom">
-          <button className="icon" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))} title="Zoom out">
-            −
-          </button>
-          <button className="icon" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} title="Zoom in">
-            +
-          </button>
+          {projectId && (
+            <a className="small link" href={api.exportUrl(projectId)} download={`${projectId}-history.json`}>
+              Export
+            </a>
+          )}
         </div>
-        {projectId && (
-          <a className="small link" href={api.exportUrl(projectId)} download={`${projectId}-history.json`}>
-            Export
-          </a>
-        )}
       </header>
 
       <main className="workspace">
