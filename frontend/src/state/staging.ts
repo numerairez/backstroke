@@ -127,6 +127,55 @@ export function applyChanges(persisted: PlanState, staged: Change[]): PlanState 
   return state;
 }
 
+/** Staged changes are folded per entity, so type + id identifies one staged change. */
+export function changeKey(change: Change): string {
+  return `${change.entity_type}:${change.entity_id}`;
+}
+
+/** Keys of staged creates that `change` refers to and so can't be committed without. */
+function requiredKeys(change: Change): string[] {
+  const keys: string[] = [];
+  if (change.entity_type === "dependency" && change.operation === "create") {
+    keys.push(`deliverable:${change.fields.predecessor_id}`, `deliverable:${change.fields.successor_id}`);
+  }
+  if (change.entity_type === "deliverable" && typeof change.fields.workstream_id === "string") {
+    keys.push(`workstream:${change.fields.workstream_id}`);
+  }
+  return keys;
+}
+
+export interface Selection {
+  /** The staged changes that will be committed, in staged order. */
+  changes: Change[];
+  /** Unchecked keys pulled back in because a selected change refers to them, with who needs them. */
+  required: Map<string, Change[]>;
+}
+
+/**
+ * Resolve which staged changes go into the next commit: everything not in `excluded`, plus any
+ * staged creates those changes refer to (a dependency on a new deliverable, a deliverable in a new lane).
+ */
+export function selectChanges(staged: Change[], excluded: Set<string>): Selection {
+  const byKey = new Map(staged.map((c) => [changeKey(c), c]));
+  const included = new Set<string>();
+  const required = new Map<string, Change[]>();
+  const queue = staged.filter((c) => !excluded.has(changeKey(c)));
+  queue.forEach((c) => included.add(changeKey(c)));
+  while (queue.length) {
+    const change = queue.shift()!;
+    for (const key of requiredKeys(change)) {
+      const needed = byKey.get(key);
+      if (!needed || needed.operation !== "create") continue;
+      if (excluded.has(key)) required.set(key, [...(required.get(key) ?? []), change]);
+      if (!included.has(key)) {
+        included.add(key);
+        queue.push(needed);
+      }
+    }
+  }
+  return { changes: staged.filter((c) => included.has(changeKey(c))), required };
+}
+
 export function stagedEntityIds(staged: Change[]): Set<string> {
   return new Set(staged.map((c) => c.entity_id));
 }

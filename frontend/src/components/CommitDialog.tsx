@@ -4,7 +4,10 @@ import type { Category, Change, PlanState, Preview } from "../types";
 import { describeChange } from "../state/staging";
 
 interface Props {
+  /** The changes going into this commit (the selected part of the staged set). */
   staged: Change[];
+  /** Staged changes left out of this commit; they stay staged afterwards. */
+  remaining: number;
   persisted: PlanState;
   proposed: PlanState;
   preview: Preview | null;
@@ -49,6 +52,12 @@ export function CommitDialog(props: Props) {
         <h2 id="commit-title">Commit {props.staged.length} change{props.staged.length === 1 ? "" : "s"}</h2>
         <p className="muted">
           Creates version <b>#{props.version + 1}</b>. Every change is kept in history; nothing is overwritten.
+          {props.remaining > 0 && (
+            <>
+              {" "}
+              <b>{props.remaining}</b> other staged change{props.remaining === 1 ? "" : "s"} will stay staged for a separate commit.
+            </>
+          )}
         </p>
 
         <ul className="commit-summary">
@@ -62,6 +71,15 @@ export function CommitDialog(props: Props) {
             );
           })}
         </ul>
+        {props.preview && !props.preview.valid && (
+          <div className="callout error small">
+            <ul>
+              {props.preview.errors.map((e) => (
+                <li key={e.code + e.message}>{e.message}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {conflicts > 0 && (
           <div className="callout warn small">
             {conflicts} dependency conflict{conflicts === 1 ? "" : "s"} will remain after this commit.

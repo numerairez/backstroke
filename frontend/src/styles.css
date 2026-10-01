@@ -1709,3 +1709,19 @@ button.done-btn:hover:not(:disabled) {
   background: var(--added);
   filter: brightness(1.08);
 }
+.staged-select {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.staged-select label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.staged-item.unselected {
+  opacity: 0.55;
+  border-style: dotted;
+}

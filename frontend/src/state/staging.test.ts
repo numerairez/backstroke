@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Change, PlanState } from "../types";
-import { applyChanges, describeChange, revertEntity, stageChange } from "./staging";
+import { applyChanges, describeChange, revertEntity, selectChanges, stageChange } from "./staging";
 
 const persisted: PlanState = {
   workstreams: [{ id: "data", name: "Data", order_index: 0 }],
@@ -68,5 +68,40 @@ describe("staging", () => {
     const d = describeChange(staged[0], persisted, applyChanges(persisted, staged));
     expect(d.title).toBe("Deliverable “UAT”");
     expect(d.lines).toEqual(["start: 12 Oct → 19 Oct (+7d)", "end: 16 Oct → 23 Oct (+7d)"]);
+  });
+});
+
+describe("selecting changes to commit", () => {
+  const lane: Change = { entity_type: "workstream", entity_id: "qa", operation: "create", fields: { name: "QA" } };
+  const created: Change = {
+    entity_type: "deliverable",
+    entity_id: "new",
+    operation: "create",
+    fields: { workstream_id: "qa", type: "task", name: "Smoke", start_date: "2026-10-19", end_date: "2026-10-20" },
+  };
+  const dep: Change = { entity_type: "dependency", entity_id: "d2", operation: "create", fields: { predecessor_id: "uat", successor_id: "new", type: "FS" } };
+  const slip = move("map", { end_date: "2026-10-12" });
+  const staged = [slip, lane, created, dep];
+
+  it("commits everything when nothing is unchecked", () => {
+    expect(selectChanges(staged, new Set()).changes).toEqual(staged);
+  });
+
+  it("leaves unchecked changes out, keeping staged order", () => {
+    const { changes, required } = selectChanges(staged, new Set(["deliverable:map"]));
+    expect(changes).toEqual([lane, created, dep]);
+    expect(required.size).toBe(0);
+  });
+
+  it("pulls in the staged creates a selected change refers to, transitively", () => {
+    const { changes, required } = selectChanges(staged, new Set(["deliverable:map", "workstream:qa", "deliverable:new"]));
+    expect(changes).toEqual([lane, created, dep]);
+    expect(required.get("deliverable:new")).toEqual([dep]);
+    expect(required.get("workstream:qa")).toEqual([created]);
+  });
+
+  it("doesn't pull in anything for references to saved entities", () => {
+    const { changes } = selectChanges(staged, new Set(["workstream:qa", "deliverable:new", "dependency:d2"]));
+    expect(changes).toEqual([slip]);
   });
 });

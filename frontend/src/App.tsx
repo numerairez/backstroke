@@ -486,7 +486,12 @@ export default function App() {
                 persisted={p.persisted}
                 proposed={p.proposed}
                 preview={p.preview}
+                selection={p.selection}
+                selectionPreview={p.selectionPreview}
+                excluded={p.excluded}
                 editable={live}
+                onToggle={p.toggleSelected}
+                onSelectAll={p.selectAll}
                 onUnstage={p.unstage}
                 onDiscard={() => window.confirm(`Discard ${staged} staged change${staged === 1 ? "" : "s"}?`) && p.discard()}
                 onSelect={(id) => {
@@ -561,10 +566,11 @@ export default function App() {
 
       {commitOpen && (
         <CommitDialog
-          staged={p.staged}
+          staged={p.selection.changes}
+          remaining={p.staged.length - p.selection.changes.length}
           persisted={p.persisted}
           proposed={p.proposed}
-          preview={p.preview}
+          preview={p.selectionPreview}
           categories={categories}
           version={p.version}
           author={author}
@@ -572,10 +578,15 @@ export default function App() {
           onReload={p.refresh}
           onClose={() => setCommitOpen(false)}
           onCommit={async (input) => {
+            const left = p.staged.length - p.selection.changes.length;
             const commit = await p.commit(input);
             setCommitOpen(false);
-            setTab("history");
-            flash(`Committed #${commit.seq}: ${commit.reason}`);
+            if (left > 0) {
+              flash(`Committed #${commit.seq}: ${commit.reason} · ${left} change${left === 1 ? "" : "s"} still staged`);
+            } else {
+              setTab("history");
+              flash(`Committed #${commit.seq}: ${commit.reason}`);
+            }
           }}
         />
       )}

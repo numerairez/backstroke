@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, type CommitInput } from "../api/client";
 import type { Change, CommitSummary, EntityType, PlanState, Preview, Project } from "../types";
-import { applyChanges, rebaseProgress, revertEntity, stageChange } from "./staging";
+import { applyChanges, changeKey, rebaseProgress, revertEntity, selectChanges, stageChange, type Selection } from "./staging";
 
 const EMPTY: PlanState = { workstreams: [], deliverables: [], dependencies: [] };
 
@@ -35,6 +35,13 @@ export interface ProjectStore {
   commits: CommitSummary[];
   staged: Change[];
   preview: Preview | null;
+  /** What the next commit will contain: checked changes plus the staged creates they need. */
+  selection: Selection;
+  /** Dry run of just the selection (the same as `preview` when everything is selected). */
+  selectionPreview: Preview | null;
+  excluded: Set<string>;
+  toggleSelected: (key: string) => void;
+  selectAll: (selected: boolean) => void;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -43,6 +50,7 @@ export interface ProjectStore {
   unstage: (index: number) => void;
   revert: (type: EntityType, id: string) => void;
   discard: () => void;
+  /** Commit the selection; unselected changes stay staged for a later commit. */
   commit: (input: Omit<CommitInput, "changes" | "base_version">) => Promise<CommitSummary>;
   revertCommit: (seq: number, author: string, reason?: string) => Promise<CommitSummary>;
   /** Mark a deliverable (phase null) or one of its phases done on a date, or reopen it (null). */
@@ -59,6 +67,8 @@ export function useProject(projectId: string | null): ProjectStore {
   const [commits, setCommits] = useState<CommitSummary[]>([]);
   const [staged, setStaged] = useState<Change[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [subsetPreview, setSubsetPreview] = useState<Preview | null>(null);
+  const [excluded, setExcluded] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cacheTick, setCacheTick] = useState(0);
@@ -80,6 +90,7 @@ export function useProject(projectId: string | null): ProjectStore {
     setPersisted(EMPTY);
     setCommits([]);
     setPreview(null);
+    setExcluded(new Set());
     if (!projectId) return;
     setStaged(loadDraft(projectId));
     setLoading(true);
@@ -111,6 +122,54 @@ export function useProject(projectId: string | null): ProjectStore {
 
   useEffect(() => setStaged((s) => rebaseProgress(s, persisted)), [persisted]);
 
+  // Forget unchecked marks for changes that are no longer staged, so re-staging them starts checked.
+  useEffect(() => {
+    setExcluded((prev) => {
+      const keys = new Set(staged.map(changeKey));
+      const next = new Set([...prev].filter((k) => keys.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [staged]);
+
+  const selection = useMemo(() => selectChanges(staged, excluded), [staged, excluded]);
+  const partial = selection.changes.length !== staged.length;
+
+  // A partial commit is validated on its own: it may lack a change the full set relies on.
+  useEffect(() => {
+    if (!projectId || !project || !partial || selection.changes.length === 0) {
+      setSubsetPreview(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api
+        .preview(projectId, selection.changes)
+        .then((p) => !cancelled && setSubsetPreview(p))
+        .catch(() => !cancelled && setSubsetPreview(null));
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [projectId, project, partial, selection, version]);
+
+  const selectionPreview = partial ? subsetPreview : preview;
+
+  const toggleSelected = useCallback(
+    (key: string) =>
+      setExcluded((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      }),
+    [],
+  );
+  const selectAll = useCallback(
+    (selected: boolean) => setExcluded(selected ? new Set() : new Set(staged.map(changeKey))),
+    [staged],
+  );
+
   const proposed = useMemo(() => applyChanges(persisted, staged), [persisted, staged]);
 
   const stage = useCallback((change: Change) => setStaged((s) => stageChange(s, change, persisted)), [persisted]);
@@ -125,12 +184,14 @@ export function useProject(projectId: string | null): ProjectStore {
   const commit = useCallback(
     async (input: Omit<CommitInput, "changes" | "base_version">) => {
       if (!projectId) throw new Error("no project");
-      const result = await api.commit(projectId, { ...input, base_version: version, changes: staged });
-      setStaged([]);
+      const changes = selection.changes;
+      const result = await api.commit(projectId, { ...input, base_version: version, changes });
+      const committed = new Set(changes.map(changeKey));
+      setStaged((s) => s.filter((c) => !committed.has(changeKey(c))));
       await refresh();
       return result.commit;
     },
-    [projectId, version, staged, refresh],
+    [projectId, version, selection, refresh],
   );
 
   const revertCommit = useCallback(
@@ -194,6 +255,11 @@ export function useProject(projectId: string | null): ProjectStore {
     commits,
     staged,
     preview,
+    selection,
+    selectionPreview,
+    excluded,
+    toggleSelected,
+    selectAll,
     loading,
     error,
     refresh,
