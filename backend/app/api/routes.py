@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, RevertRequest
 from ..domain.events import serialize_state
+from ..domain.meetings import FinishMeetingRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest
 from ..domain.validators import REASON_CATEGORIES
-from ..services import commit_service, diff_service, projection_service, history_service, metrics_service, project_service, version_service
+from ..services import commit_service, diff_service, history_service, meeting_service, metrics_service, project_service, projection_service, version_service
 from ..services.commit_service import NotFound, VersionConflict
 
 router = APIRouter(prefix="/api")
@@ -173,7 +174,66 @@ def export_project(project_id: str, session: Session = Depends(get_session)) -> 
         "project": {"id": project.id, "name": project.name, "description": project.description, "created_at": project.created_at},
         "baselines": project_service.list_baselines(session, project_id),
         "commits": history_service.list_commits(session, project_id, include_events=True),
+        "meetings": meeting_service.list_meetings(session, project_id),
+        "register": meeting_service.list_items(session, project_id),
     }
+
+
+@router.get("/projects/{project_id}/meetings")
+def list_meetings(project_id: str, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return meeting_service.list_meetings(session, project_id)
+
+
+@router.post("/projects/{project_id}/meetings", status_code=201)
+def create_meeting(project_id: str, body: MeetingCreateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    meeting = meeting_service.create_meeting(session, project_id, body.title, body.held_on, body.attendees)
+    session.commit()
+    return meeting_service.meeting_to_dict(session, meeting)
+
+
+@router.get("/projects/{project_id}/meetings/{meeting_id}")
+def get_meeting(project_id: str, meeting_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    return meeting_service.meeting_to_dict(session, meeting_service.require_meeting(session, project_id, meeting_id))
+
+
+@router.patch("/projects/{project_id}/meetings/{meeting_id}")
+def update_meeting(project_id: str, meeting_id: int, body: MeetingUpdateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    meeting = meeting_service.update_meeting(session, project_id, meeting_id, body)
+    session.commit()
+    return meeting_service.meeting_to_dict(session, meeting)
+
+
+@router.delete("/projects/{project_id}/meetings/{meeting_id}", status_code=204)
+def delete_meeting(project_id: str, meeting_id: int, session: Session = Depends(get_session)) -> None:
+    meeting_service.delete_meeting(session, project_id, meeting_id)
+    session.commit()
+
+
+@router.post("/projects/{project_id}/meetings/{meeting_id}/finish", status_code=201)
+def finish_meeting(project_id: str, meeting_id: int, body: FinishMeetingRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Record the meeting's actions, risks and decisions, plus at most one plan commit, atomically."""
+    result = meeting_service.finish_meeting(session, project_id, meeting_id, body)
+    session.commit()
+    return result
+
+
+@router.get("/projects/{project_id}/register")
+def list_register(project_id: str, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return meeting_service.list_items(session, project_id)
+
+
+@router.post("/projects/{project_id}/register", status_code=201)
+def create_register_item(project_id: str, body: ItemInput, session: Session = Depends(get_session)) -> dict[str, Any]:
+    item = meeting_service.create_item(session, project_id, body)
+    session.commit()
+    return meeting_service.item_to_dict(session, item)
+
+
+@router.patch("/projects/{project_id}/register/{item_id}")
+def update_register_item(project_id: str, item_id: int, body: ItemUpdateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    item = meeting_service.update_item(session, project_id, item_id, body)
+    session.commit()
+    return meeting_service.item_to_dict(session, item)
 
 
 def install_error_handlers(app) -> None:

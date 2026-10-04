@@ -1,4 +1,4 @@
-import type { Baseline, Category, Change, CommitSummary, Diff, Metrics, PlanState, Preview, Project, ValidationError } from "../types";
+import type { Attendee, Baseline, Category, Change, CommitSummary, Diff, ItemInput, Meeting, Metrics, PlanState, Preview, Project, RegisterItem, ValidationError } from "../types";
 
 export class ApiError extends Error {
   status: number;
@@ -28,6 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const post = <T>(path: string, body: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(body) });
+const patch = <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 
 export interface VersionedState {
   version: number;
@@ -49,6 +50,22 @@ export interface CommitInput {
   changes: Change[];
 }
 
+export interface FinishMeetingInput {
+  author: string;
+  items: ItemInput[];
+  commit: { reason: string; category: string | null; base_version: number; changes: Change[] } | null;
+}
+
+export interface ItemUpdate {
+  text?: string;
+  owner?: string | null;
+  due_on?: string | null;
+  deliverable_ids?: string[];
+  status?: string;
+  closed_on?: string | null;
+  superseded_by?: string;
+}
+
 export const api = {
   categories: () => request<Category[]>("/categories"),
   projects: () => request<Project[]>("/projects"),
@@ -68,4 +85,14 @@ export const api = {
   metrics: (id: string, baseline?: number) =>
     request<Metrics>(`/projects/${id}/metrics${baseline !== undefined ? `?baseline=${baseline}` : ""}`),
   exportUrl: (id: string) => `/api/projects/${id}/export`,
+  meetings: (id: string) => request<Meeting[]>(`/projects/${id}/meetings`),
+  createMeeting: (id: string, input: { title: string; held_on: string; attendees?: Attendee[] }) => post<Meeting>(`/projects/${id}/meetings`, input),
+  updateMeeting: (id: string, meetingId: number, input: { title?: string; held_on?: string; attendees?: Attendee[]; notes?: string }) =>
+    patch<Meeting>(`/projects/${id}/meetings/${meetingId}`, input),
+  deleteMeeting: (id: string, meetingId: number) => request<void>(`/projects/${id}/meetings/${meetingId}`, { method: "DELETE" }),
+  finishMeeting: (id: string, meetingId: number, input: FinishMeetingInput) =>
+    post<{ meeting: Meeting; commit: CommitResult | null }>(`/projects/${id}/meetings/${meetingId}/finish`, input),
+  register: (id: string) => request<RegisterItem[]>(`/projects/${id}/register`),
+  createItem: (id: string, input: ItemInput) => post<RegisterItem>(`/projects/${id}/register`, input),
+  updateItem: (id: string, itemId: number, input: ItemUpdate) => patch<RegisterItem>(`/projects/${id}/register/${itemId}`, input),
 };

@@ -227,3 +227,53 @@ export interface Metrics {
     }[];
   };
 }
+
+export type ItemKind = "action" | "risk" | "decision";
+
+export interface Attendee {
+  name: string;
+  present: boolean;
+}
+
+/** An action, risk or decision. `ref` is its register number, e.g. "A-7". */
+export interface RegisterItem {
+  id: number;
+  ref: string;
+  kind: ItemKind;
+  text: string;
+  owner: string | null;
+  due_on: string | null;
+  /** Empty for a programme-level item. */
+  deliverable_ids: string[];
+  meeting: { id: number; title: string; held_on: string } | null;
+  status: string;
+  open: boolean;
+  closed_on: string | null;
+  superseded_by: string | null;
+  created_at: string;
+}
+
+export interface Meeting {
+  id: number;
+  title: string;
+  held_on: string;
+  attendees: Attendee[];
+  notes: string;
+  finished_at: string | null;
+  /** The plan commit made when the meeting finished, if it changed the plan. */
+  commit_seq: number | null;
+  plan_version: number | null;
+  /** What its commit's reference says, e.g. "Steering committee 2026-10-08". */
+  reference: string;
+  items: RegisterItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ItemInput {
+  kind: ItemKind;
+  text: string;
+  owner: string | null;
+  due_on: string | null;
+  deliverable_ids: string[];
+}

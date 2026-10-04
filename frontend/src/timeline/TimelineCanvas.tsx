@@ -40,6 +40,8 @@ interface Props {
   colorBy: ColorBy;
   onToggleExpand: (id: string) => void;
   onSelect: (id: string | null) => void;
+  /** A bar was clicked without being dragged. */
+  onPick?: (id: string) => void;
   onStage: (change: Change) => void;
   onAddDeliverable: (workstreamId: string, date?: string) => void;
 }
@@ -154,7 +156,10 @@ export function TimelineCanvas(props: Props) {
     if (e.button !== 0) return;
     e.stopPropagation();
     props.onSelect(item.id);
-    if (!editable || item.status === "removed") return;
+    if (!editable || item.status === "removed") {
+      props.onPick?.(item.id);
+      return;
+    }
     const d = item.deliverable;
     const g = geometry(model, d, item.rowY);
     const svg = (e.currentTarget as SVGElement).ownerSVGElement!;
@@ -191,6 +196,7 @@ export function TimelineCanvas(props: Props) {
     if (!drag) return;
     const item = model.items.get(drag.id);
     setDrag(null);
+    if (item && drag.delta === 0) props.onPick?.(item.id);
     if (!item || drag.delta === 0) return;
     const before = item.deliverable;
     const after = applyDrag(before, drag);

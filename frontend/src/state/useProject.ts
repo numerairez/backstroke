@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, api, type CommitInput } from "../api/client";
-import type { Change, CommitSummary, EntityType, PlanState, Preview, Project } from "../types";
+import { ApiError, api, type CommitInput, type FinishMeetingInput } from "../api/client";
+import type { Change, CommitSummary, EntityType, Meeting, PlanState, Preview, Project } from "../types";
 import { applyChanges, changeKey, rebaseProgress, revertEntity, selectChanges, stageChange, type Selection } from "./staging";
 
 const EMPTY: PlanState = { workstreams: [], deliverables: [], dependencies: [] };
@@ -53,6 +53,11 @@ export interface ProjectStore {
   /** Commit the selection; unselected changes stay staged for a later commit. */
   commit: (input: Omit<CommitInput, "changes" | "base_version">) => Promise<CommitSummary>;
   revertCommit: (seq: number, author: string, reason?: string) => Promise<CommitSummary>;
+  /** Finish a meeting: record its items and, when `commit` is given, commit the selection with it. */
+  finishMeeting: (
+    meetingId: number,
+    input: Omit<FinishMeetingInput, "commit"> & { commit: { reason: string; category: string | null } | null },
+  ) => Promise<{ meeting: Meeting; commit: CommitSummary | null }>;
   /** Mark a deliverable (phase null) or one of its phases done on a date, or reopen it (null). */
   recordProgress: (author: string, deliverableId: string, phase: number | null, finishedOn: string | null) => Promise<CommitSummary>;
   createBaseline: (name: string, version: number) => Promise<void>;
@@ -194,6 +199,24 @@ export function useProject(projectId: string | null): ProjectStore {
     [projectId, version, selection, refresh],
   );
 
+  const finishMeeting = useCallback(
+    async (meetingId: number, input: Omit<FinishMeetingInput, "commit"> & { commit: { reason: string; category: string | null } | null }) => {
+      if (!projectId) throw new Error("no project");
+      const changes = selection.changes;
+      const result = await api.finishMeeting(projectId, meetingId, {
+        ...input,
+        commit: input.commit ? { ...input.commit, base_version: version, changes } : null,
+      });
+      if (result.commit) {
+        const committed = new Set(changes.map(changeKey));
+        setStaged((s) => s.filter((c) => !committed.has(changeKey(c))));
+        await refresh();
+      }
+      return { meeting: result.meeting, commit: result.commit?.commit ?? null };
+    },
+    [projectId, version, selection, refresh],
+  );
+
   const revertCommit = useCallback(
     async (seq: number, author: string, reason?: string) => {
       if (!projectId) throw new Error("no project");
@@ -270,6 +293,7 @@ export function useProject(projectId: string | null): ProjectStore {
     discard,
     commit,
     revertCommit,
+    finishMeeting,
     recordProgress,
     createBaseline,
     stateAt,

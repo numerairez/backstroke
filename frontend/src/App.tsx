@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api/client";
 import { CommitDialog } from "./components/CommitDialog";
+import { FinishMeetingDialog } from "./components/FinishMeetingDialog";
 import { InspectorPanel } from "./components/InspectorPanel";
+import { MeetingsPanel } from "./components/MeetingsPanel";
+import { RegisterPanel, isOverdue } from "./components/RegisterPanel";
 import { StagedChangesDrawer } from "./components/StagedChangesDrawer";
 import { ComparePanel, type CompareRange } from "./history/ComparePanel";
 import { describeEvents } from "./history/describe";
@@ -9,14 +12,16 @@ import { HistoryPanel, categoryLabel } from "./history/HistoryPanel";
 import { MetricsPanel } from "./history/MetricsPanel";
 import { PlaybackControls } from "./history/PlaybackControls";
 import { addDays, formatTimestamp, todayIso } from "./state/dates";
+import { itemsFromNotes, parseNotes } from "./state/notes";
 import { newId, stagedEntityIds } from "./state/staging";
+import { useMeetings } from "./state/useMeetings";
 import { useProject } from "./state/useProject";
 import { PHASE_COLORS, phaseNameOrder } from "./state/phases";
 import { deliverableStatus, type StatusKind } from "./state/status";
 import { TimelineCanvas, type ColorBy } from "./timeline/TimelineCanvas";
-import type { Category, PlanState, Project } from "./types";
+import type { Category, Meeting, PlanState, Project } from "./types";
 
-type Tab = "inspect" | "changes" | "history" | "compare" | "metrics";
+type Tab = "inspect" | "changes" | "history" | "compare" | "metrics" | "meetings" | "register";
 const ZOOMS = [6, 10, 16, 26, 40];
 const PLAY_INTERVAL_MS = 1800;
 
@@ -56,9 +61,13 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [openMeetingId, setOpenMeetingId] = useState<number | null>(null);
+  const [mentionRequest, setMentionRequest] = useState<{ name: string; nonce: number } | null>(null);
+  const [finishing, setFinishing] = useState<Meeting | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
 
   const p = useProject(projectId);
+  const meetings = useMeetings(projectId);
   const today = todayIso();
   const live = viewVersion === null;
 
@@ -79,6 +88,7 @@ export default function App() {
     setSelectedId(null);
     setPlaying(false);
     setExpanded(new Set());
+    setOpenMeetingId(null);
   }, [projectId]);
   useEffect(() => store("backstroke:author", author), [author]);
   useEffect(() => store("backstroke:zoom", String(zoom)), [zoom]);
@@ -236,9 +246,22 @@ export default function App() {
     setProjectId(created.id);
   };
 
+  // With a meeting open, the sidebar stays on its notes: selecting a bar doesn't switch to the inspector.
+  const takingNotes = tab === "meetings" && openMeetingId !== null;
   const select = (id: string | null) => {
     setSelectedId(id);
-    if (id) setTab("inspect");
+    if (id && !takingNotes) setTab("inspect");
+  };
+  const pick = (id: string) => {
+    const d = displayed.deliverables.find((x) => x.id === id);
+    if (takingNotes && d) setMentionRequest({ name: d.name, nonce: Date.now() });
+  };
+
+  const viewCommit = (seq: number) => {
+    setPlaying(false);
+    view(seq === p.version ? null : seq);
+    p.stateAt(seq);
+    if (seq > 0) p.stateAt(seq - 1);
   };
 
   // --- Narration for the version on screen ----------------------------------------
@@ -277,6 +300,7 @@ export default function App() {
 
   const baseline = p.project?.baselines[0];
   const staged = p.staged.length;
+  const overdueActions = meetings.register.filter((i) => isOverdue(i, today)).length;
 
   if (bootError) return <div className="boot-error">{bootError}</div>;
 
@@ -415,6 +439,7 @@ export default function App() {
             colorBy={colorBy}
             onToggleExpand={toggleExpand}
             onSelect={select}
+            onPick={pick}
             onStage={(c) => {
               p.stage(c);
             }}
@@ -457,6 +482,8 @@ export default function App() {
                 ["history", "History"],
                 ["compare", "Compare"],
                 ["metrics", "Metrics"],
+                ["meetings", "Meetings"],
+                ["register", `Register${overdueActions ? ` (${overdueActions} overdue)` : ""}`],
               ] as [Tab, string][]
             ).map(([key, label]) => (
               <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
@@ -544,6 +571,31 @@ export default function App() {
             {tab === "metrics" && projectId && (
               <MetricsPanel projectId={projectId} version={p.version} baselines={p.project?.baselines ?? []} categories={categories} onSelect={select} />
             )}
+            {tab === "meetings" && (
+              <MeetingsPanel
+                store={meetings}
+                deliverables={p.proposed.deliverables}
+                today={today}
+                openId={openMeetingId}
+                onOpen={setOpenMeetingId}
+                mentionRequest={mentionRequest}
+                stagedCount={p.selection.changes.length}
+                onReviewChanges={() => setTab("changes")}
+                onFinish={setFinishing}
+                onViewCommit={viewCommit}
+                onSelectDeliverable={setSelectedId}
+              />
+            )}
+            {tab === "register" && (
+              <RegisterPanel
+                register={meetings.register}
+                deliverables={p.persisted.deliverables}
+                today={today}
+                onSelectDeliverable={select}
+                onCreate={meetings.createItem}
+                onUpdate={meetings.updateItem}
+              />
+            )}
           </div>
         </aside>
       </main>
@@ -587,6 +639,33 @@ export default function App() {
               setTab("history");
               flash(`Committed #${commit.seq}: ${commit.reason}`);
             }
+          }}
+        />
+      )}
+      {finishing && (
+        <FinishMeetingDialog
+          meeting={meetings.meetings.find((m) => m.id === finishing.id) ?? finishing}
+          deliverables={p.proposed.deliverables}
+          staged={p.selection.changes}
+          persisted={p.persisted}
+          proposed={p.proposed}
+          preview={p.selectionPreview}
+          categories={categories}
+          version={p.version}
+          author={author}
+          onAuthorChange={setAuthor}
+          onReload={p.refresh}
+          onClose={() => setFinishing(null)}
+          onFinish={async ({ author: who, withCommit, reason, category }) => {
+            const m = meetings.meetings.find((x) => x.id === finishing.id) ?? finishing;
+            const items = itemsFromNotes(parseNotes(m.notes, p.proposed.deliverables, m.held_on)).map(({ line: _line, ...item }) => item);
+            const result = await p.finishMeeting(m.id, { author: who, items, commit: withCommit ? { reason, category } : null });
+            await meetings.finished(result.meeting);
+            setFinishing(null);
+            flash(
+              `Finished ${m.title}: ${items.length} item${items.length === 1 ? "" : "s"} recorded` +
+                (result.commit ? `, plan commit #${result.commit.seq}` : ""),
+            );
           }}
         />
       )}

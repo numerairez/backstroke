@@ -134,3 +134,46 @@ IDENTITY_MODELS = {
     "deliverable": DeliverableIdentity,
     "dependency": DependencyIdentity,
 }
+
+
+# --- Meetings and the register: editable records outside the plan history ----------------
+# Notes stay editable after a meeting. The plan changes a meeting agrees go through a normal
+# commit, linked here rather than on the append-only commits table.
+
+
+class Meeting(Base):
+    __tablename__ = "meetings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String)
+    held_on: Mapped[str] = mapped_column(String)
+    attendees: Mapped[list] = mapped_column(JSON, default=list)  # [{"name": ..., "present": bool}]
+    notes: Mapped[str] = mapped_column(Text, default="")
+    finished_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    commit_id: Mapped[int | None] = mapped_column(ForeignKey("commits.id"), nullable=True)
+    plan_version: Mapped[int | None] = mapped_column(Integer, nullable=True)  # plan version when it finished
+    created_at: Mapped[str] = mapped_column(String)
+    updated_at: Mapped[str] = mapped_column(String)
+
+
+class RegisterItem(Base):
+    """An action, risk or decision. Numbered per project and kind: A-7, R-3, D-12."""
+
+    __tablename__ = "register_items"
+    __table_args__ = (UniqueConstraint("project_id", "kind", "number"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    kind: Mapped[str] = mapped_column(String)
+    number: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    owner: Mapped[str | None] = mapped_column(String, nullable=True)
+    due_on: Mapped[str | None] = mapped_column(String, nullable=True)
+    deliverable_ids: Mapped[list] = mapped_column(JSON, default=list)  # empty = programme-level
+    meeting_id: Mapped[int | None] = mapped_column(ForeignKey("meetings.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String)
+    closed_on: Mapped[str | None] = mapped_column(String, nullable=True)
+    superseded_by_id: Mapped[int | None] = mapped_column(ForeignKey("register_items.id"), nullable=True)
+    created_at: Mapped[str] = mapped_column(String)
+    updated_at: Mapped[str] = mapped_column(String)

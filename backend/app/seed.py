@@ -2,6 +2,7 @@
 
 Example Program: the Appendix A scenario (Data Mapping slipping a week) is left for
 you to perform live: drag Data Mapping +7d and the UI will offer the downstream moves.
+It also has three finished meetings whose actions, risks and decisions fill the register.
 
 Checkout Revamp: Jira-style tickets broken into Dev / Review / UAT phases, mixed with
 plain deliverables, and a history in which the phases move.
@@ -18,8 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .domain.commands import Change
-from .domain.models import Project
-from .services import commit_service, project_service
+from .domain.meetings import Attendee, FinishMeetingRequest, ItemInput, ItemUpdateRequest
+from .domain.models import Commit, Project
+from .services import commit_service, meeting_service, project_service
 
 PROJECT_ID = "example-program"
 AUTHOR = "Priya (PMO)"
@@ -202,6 +204,71 @@ CHECKOUT_PROGRESS = [
 ]
 
 
+PEOPLE = ["Priya", "Dana", "Ravi", "Marco", "Jo", "Lena"]
+
+# Meetings for the example program: (title, date, finished at, absent, notes, items, linked commit, items done later).
+MEETINGS = [
+    (
+        "Kickoff",
+        "2026-08-24",
+        "2026-08-24T09:30:00Z",
+        [],
+        "Scope: data platform plus the customer service agent; Prod UI follows the prototype.\n"
+        "=decision Plan baselined with @[Go-Live] on 30 Oct\n",
+        [dict(kind="decision", text="Plan baselined with Go-Live on 30 Oct", deliverable_ids=["go-live"])],
+        1,
+        [],
+    ),
+    (
+        "Steering committee",
+        "2026-09-10",
+        "2026-09-10T15:00:00Z",
+        ["Lena"],
+        "Prototype is ahead of plan; Jo expects to finish next week.\n"
+        "?risk @Ravi vendor feed schema may change late in the build, which would hit @[Data Mapping]\n",
+        [dict(kind="risk", text="Vendor feed schema may change late in the build, which would hit Data Mapping", owner="Ravi", deliverable_ids=["data-mapping"])],
+        None,
+        [],
+    ),
+    (
+        "Steering committee",
+        "2026-09-24",
+        "2026-09-24T10:10:00Z",
+        [],
+        "Marco: the escalation tool belongs in @[Agent Build]; without it UAT can't test handover.\n"
+        "=decision Expand @[Agent Build] to include the escalation tool and pull its start forward to hold UAT\n"
+        "?risk @Marco escalation tool scope could keep growing\n"
+        "!action @Ravi get the vendor to confirm feed schema v3 by 2 Oct\n"
+        "!action @Marco name an owner for the escalation tool API by 1 Oct\n",
+        [
+            dict(kind="decision", text="Expand Agent Build to include the escalation tool and pull its start forward to hold UAT", deliverable_ids=["agent-build"]),
+            dict(kind="risk", text="Escalation tool scope could keep growing", owner="Marco", deliverable_ids=["agent-build"]),
+            dict(kind="action", text="Get the vendor to confirm feed schema v3 by 2 Oct", owner="Ravi", due_on="2026-10-02", deliverable_ids=["data-mapping"]),
+            dict(kind="action", text="Name an owner for the escalation tool API by 1 Oct", owner="Marco", due_on="2026-10-01", deliverable_ids=["agent-build"]),
+        ],
+        5,
+        [("A-2", "2026-09-30")],
+    ),
+]
+
+
+def seed_meetings(session: Session) -> None:
+    for title, held_on, finished_at, absent, notes, items, seq, done in MEETINGS:
+        attendees = [Attendee(name=n, present=n not in absent) for n in PEOPLE]
+        meeting = meeting_service.create_meeting(session, PROJECT_ID, title, held_on, attendees, notes=notes, created_at=finished_at)
+        meeting_service.finish_meeting(
+            session, PROJECT_ID, meeting.id, FinishMeetingRequest(author=AUTHOR, items=[ItemInput(**i) for i in items]), finished_at=finished_at
+        )
+        if seq is not None:
+            # The seeded history already holds the meeting's commit; link it.
+            meeting.commit_id = session.scalar(select(Commit.id).where(Commit.project_id == PROJECT_ID, Commit.seq_no == seq))
+            meeting.plan_version = seq
+        for ref, closed_on in done:
+            item = next(i for i in meeting_service.list_items(session, PROJECT_ID) if i["ref"] == ref)
+            meeting_service.update_item(session, PROJECT_ID, item["id"], ItemUpdateRequest(status="done", closed_on=closed_on))
+    session.flush()
+
+
 def seed(session: Session) -> bool:
     if session.scalar(select(Project).limit(1)) is not None:
         return False
@@ -216,6 +283,7 @@ def seed(session: Session) -> bool:
         commit_service.create_commit(session, PROJECT_ID, author=AUTHOR, base_version=version, **commit)
         if version == 0:
             project_service.create_baseline(session, PROJECT_ID, "v1.0 Kickoff baseline", 1, created_at="2026-08-24T10:00:00Z")
+    seed_meetings(session)
 
     project_service.create_project(
         session,
