@@ -2121,3 +2121,47 @@ button.done-btn:hover:not(:disabled) {
   gap: 8px;
   align-items: center;
 }
+.kb-modal {
+  width: min(860px, 100%);
+}
+.kb-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0;
+}
+.kb-option {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.kb-preview {
+  margin: 0;
+  height: min(46vh, 460px);
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.kb-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.kb-questions ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+}
+.kb-questions summary {
+  cursor: pointer;
+  color: var(--text-2);
+}

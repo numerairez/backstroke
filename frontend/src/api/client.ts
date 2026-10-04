@@ -66,6 +66,14 @@ export interface ItemUpdate {
   superseded_by?: string;
 }
 
+export interface KnowledgeOptions {
+  history: boolean;
+  notes: boolean;
+  closed: boolean;
+}
+
+const knowledgePath = (id: string, o: KnowledgeOptions) => `/api/projects/${id}/export/knowledge?history=${o.history}&notes=${o.notes}&closed=${o.closed}`;
+
 export const api = {
   categories: () => request<Category[]>("/categories"),
   projects: () => request<Project[]>("/projects"),
@@ -85,6 +93,12 @@ export const api = {
   metrics: (id: string, baseline?: number) =>
     request<Metrics>(`/projects/${id}/metrics${baseline !== undefined ? `?baseline=${baseline}` : ""}`),
   exportUrl: (id: string) => `/api/projects/${id}/export`,
+  knowledgeUrl: knowledgePath,
+  knowledge: async (id: string, o: KnowledgeOptions) => {
+    const res = await fetch(knowledgePath(id, o));
+    if (!res.ok) throw new ApiError(res.status, { message: `Couldn't build the knowledge base (HTTP ${res.status})` });
+    return res.text();
+  },
   meetings: (id: string) => request<Meeting[]>(`/projects/${id}/meetings`),
   createMeeting: (id: string, input: { title: string; held_on: string; attendees?: Attendee[] }) => post<Meeting>(`/projects/${id}/meetings`, input),
   updateMeeting: (id: string, meetingId: number, input: { title?: string; held_on?: string; attendees?: Attendee[]; notes?: string }) =>

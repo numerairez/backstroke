@@ -3,14 +3,14 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
 from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, RevertRequest
 from ..domain.events import serialize_state
 from ..domain.meetings import FinishMeetingRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest
 from ..domain.validators import REASON_CATEGORIES
-from ..services import commit_service, diff_service, history_service, meeting_service, metrics_service, project_service, projection_service, version_service
+from ..services import commit_service, diff_service, history_service, knowledge_service, meeting_service, metrics_service, project_service, projection_service, version_service
 from ..services.commit_service import NotFound, VersionConflict
 
 router = APIRouter(prefix="/api")
@@ -177,6 +177,22 @@ def export_project(project_id: str, session: Session = Depends(get_session)) -> 
         "meetings": meeting_service.list_meetings(session, project_id),
         "register": meeting_service.list_items(session, project_id),
     }
+
+
+@router.get("/projects/{project_id}/export/knowledge", response_class=PlainTextResponse)
+def export_knowledge(
+    project_id: str,
+    history: bool = True,
+    notes: bool = True,
+    closed: bool = True,
+    as_of: str | None = None,
+    session: Session = Depends(get_session),
+) -> PlainTextResponse:
+    """The project as one Markdown file for pasting into an LLM: plan, history, meetings, register."""
+    markdown = knowledge_service.build_markdown(
+        session, project_id, today=as_of, include_history=history, include_notes=notes, include_closed=closed
+    )
+    return PlainTextResponse(markdown, media_type="text/markdown; charset=utf-8")
 
 
 @router.get("/projects/{project_id}/meetings")

@@ -3,6 +3,7 @@ import { ApiError, api } from "./api/client";
 import { CommitDialog } from "./components/CommitDialog";
 import { FinishMeetingDialog } from "./components/FinishMeetingDialog";
 import { InspectorPanel } from "./components/InspectorPanel";
+import { KnowledgeDialog } from "./components/KnowledgeDialog";
 import { MeetingsPanel } from "./components/MeetingsPanel";
 import { RegisterPanel, isOverdue } from "./components/RegisterPanel";
 import { StagedChangesDrawer } from "./components/StagedChangesDrawer";
@@ -64,6 +65,7 @@ export default function App() {
   const [openMeetingId, setOpenMeetingId] = useState<number | null>(null);
   const [mentionRequest, setMentionRequest] = useState<{ name: string; nonce: number } | null>(null);
   const [finishing, setFinishing] = useState<Meeting | null>(null);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
 
   const p = useProject(projectId);
@@ -384,9 +386,14 @@ export default function App() {
             </button>
           </div>
           {projectId && (
-            <a className="small link" href={api.exportUrl(projectId)} download={`${projectId}-history.json`}>
-              Export
-            </a>
+            <>
+              <button className="small link" onClick={() => setKnowledgeOpen(true)} title="The project as one Markdown file to paste into an assistant">
+                Knowledge base
+              </button>
+              <a className="small link" href={api.exportUrl(projectId)} download={`${projectId}-history.json`}>
+                Export
+              </a>
+            </>
           )}
         </div>
       </header>
@@ -668,6 +675,9 @@ export default function App() {
             );
           }}
         />
+      )}
+      {knowledgeOpen && projectId && (
+        <KnowledgeDialog projectId={projectId} projectName={p.project?.name ?? projectId} onClose={() => setKnowledgeOpen(false)} />
       )}
       {toast && <div className="toast">{toast}</div>}
     </div>
