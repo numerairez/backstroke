@@ -277,3 +277,75 @@ export interface ItemInput {
   due_on: string | null;
   deliverable_ids: string[];
 }
+
+/** How a date move came about: agreed at a meeting, raised beforehand, or a surprise. */
+export interface MoveSignal {
+  kind: "agreed" | "foreseen" | "surprise";
+  /** The meeting or register item (e.g. "R-3") that raised it. */
+  by: string | null;
+  moved: string[];
+}
+
+export interface TrailCommit {
+  seq: number;
+  date: string;
+  author: string;
+  reason: string;
+  category: string | null;
+  reference: string | null;
+  meeting: string | null;
+  lines: string[];
+  signal: MoveSignal | null;
+}
+
+export interface TrailItem {
+  ref: string;
+  kind: ItemKind;
+  text: string;
+}
+
+export type TrailEntry =
+  | ({ type: "commit" } & TrailCommit)
+  | { type: "meeting"; date: string; meeting: string; meeting_id: number; items: TrailItem[]; notes: string[] }
+  | { type: "item"; date: string; items: TrailItem[] };
+
+export interface DeliverableTrail {
+  deliverable_id: string;
+  name: string;
+  recent_days: number;
+  entries: TrailEntry[];
+}
+
+export interface Surprises {
+  recent_days: number;
+  total: number;
+  agreed: number;
+  foreseen: number;
+  surprise: number;
+  commits: (MoveSignal & { seq: number; date: string; reason: string; deliverables: string[] })[];
+}
+
+export interface PreReadItem {
+  ref: string;
+  kind: ItemKind;
+  text: string;
+  owner: string | null;
+  due_on: string | null;
+  overdue: boolean;
+  deliverables: string[];
+}
+
+export interface PreRead {
+  as_of: string;
+  since: { meeting: string | null; date: string; version: number | null };
+  version: number;
+  commits: TrailCommit[];
+  finished: string[];
+  attention: { id: string; name: string; kind: "behind" | "overdue"; status: string; risks: string[] }[];
+  coming_up: { date: string; id: string; text: string }[];
+  lookahead_days: number;
+  actions: PreReadItem[];
+  risks: PreReadItem[];
+  decisions: PreReadItem[];
+  agenda: string[];
+}

@@ -10,7 +10,7 @@ from ..domain.commands import BaselineRequest, CommitRequest, DomainError, Previ
 from ..domain.events import serialize_state
 from ..domain.meetings import FinishMeetingRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest
 from ..domain.validators import REASON_CATEGORIES
-from ..services import commit_service, diff_service, history_service, knowledge_service, meeting_service, metrics_service, project_service, projection_service, version_service
+from ..services import commit_service, diff_service, history_service, knowledge_service, meeting_service, trail_service, metrics_service, project_service, projection_service, version_service
 from ..services.commit_service import NotFound, VersionConflict
 
 router = APIRouter(prefix="/api")
@@ -231,6 +231,24 @@ def finish_meeting(project_id: str, meeting_id: int, body: FinishMeetingRequest,
     result = meeting_service.finish_meeting(session, project_id, meeting_id, body)
     session.commit()
     return result
+
+
+@router.get("/projects/{project_id}/meetings/{meeting_id}/preread")
+def meeting_preread(project_id: str, meeting_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Changes since the series last met, what needs attention, what's coming up, and a draft agenda."""
+    return trail_service.preread(session, project_id, meeting_id)
+
+
+@router.get("/projects/{project_id}/deliverables/{deliverable_id}/trail")
+def deliverable_trail(project_id: str, deliverable_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Every commit, meeting and register item that explains where a deliverable is."""
+    return trail_service.deliverable_trail(session, project_id, deliverable_id)
+
+
+@router.get("/projects/{project_id}/surprises")
+def surprises(project_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Date moves classed as agreed at a meeting, raised beforehand, or not raised before they were committed."""
+    return trail_service.surprises(session, project_id)
 
 
 @router.get("/projects/{project_id}/register")

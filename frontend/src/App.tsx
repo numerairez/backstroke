@@ -6,6 +6,7 @@ import { InspectorPanel } from "./components/InspectorPanel";
 import { KnowledgeDialog } from "./components/KnowledgeDialog";
 import { MeetingsPanel } from "./components/MeetingsPanel";
 import { RegisterPanel, isOverdue } from "./components/RegisterPanel";
+import { DeliverableHistory, SurpriseIndex } from "./components/Trail";
 import { StagedChangesDrawer } from "./components/StagedChangesDrawer";
 import { ComparePanel, type CompareRange } from "./history/ComparePanel";
 import { describeEvents } from "./history/describe";
@@ -303,6 +304,12 @@ export default function App() {
   const baseline = p.project?.baselines[0];
   const staged = p.staged.length;
   const overdueActions = meetings.register.filter((i) => isOverdue(i, today)).length;
+  // Trail, pre-read and surprise index reload when the plan, the register or a finished meeting changes.
+  const recordsKey = `${p.version}|${meetings.register.map((i) => `${i.id}:${i.status}`).join(",")}|${meetings.meetings.filter((m) => m.finished_at).length}`;
+  const openMeeting = (id: number) => {
+    setTab("meetings");
+    setOpenMeetingId(id);
+  };
 
   if (bootError) return <div className="boot-error">{bootError}</div>;
 
@@ -514,6 +521,9 @@ export default function App() {
                 onAddDeliverable={addDeliverable}
               />
             )}
+            {tab === "inspect" && projectId && selectedId && showingLive && p.persisted.deliverables.some((d) => d.id === selectedId) && (
+              <DeliverableHistory projectId={projectId} deliverableId={selectedId} refreshKey={recordsKey} onViewCommit={viewCommit} onOpenMeeting={openMeeting} />
+            )}
             {tab === "changes" && (
               <StagedChangesDrawer
                 staged={p.staged}
@@ -576,10 +586,15 @@ export default function App() {
               />
             )}
             {tab === "metrics" && projectId && (
-              <MetricsPanel projectId={projectId} version={p.version} baselines={p.project?.baselines ?? []} categories={categories} onSelect={select} />
+              <>
+                <MetricsPanel projectId={projectId} version={p.version} baselines={p.project?.baselines ?? []} categories={categories} onSelect={select} />
+                <SurpriseIndex projectId={projectId} refreshKey={recordsKey} onViewCommit={viewCommit} />
+              </>
             )}
-            {tab === "meetings" && (
+            {tab === "meetings" && projectId && (
               <MeetingsPanel
+                projectId={projectId}
+                refreshKey={recordsKey}
                 store={meetings}
                 deliverables={p.proposed.deliverables}
                 today={today}

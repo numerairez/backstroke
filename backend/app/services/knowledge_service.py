@@ -66,11 +66,15 @@ def _progress_lines(name: str, old: list[dict] | None, new: list[dict] | None) -
     return lines
 
 
-def describe_events(before: State, events: list[Event]) -> list[str]:
-    """Plain-language lines for one commit's events, read against the state before it."""
+def describe_events(before: State, events: list[Event], only: set[int] | None = None) -> list[str]:
+    """Plain-language lines for one commit's events, read against the state before it.
+
+    `only` limits the lines to those event indices; every event is still applied, so names
+    of things created in the same commit resolve.
+    """
     state = {k: {i: dict(v) for i, v in c.items()} for k, c in before.items()}
     creates = [e for e in events if e.operation == "create"]
-    if len(creates) > SUMMARISE_CREATES_OVER:
+    if only is None and len(creates) > SUMMARISE_CREATES_OVER:
         counts: dict[str, int] = {}
         for e in creates:
             counts[e.entity_type] = counts.get(e.entity_type, 0) + 1
@@ -81,7 +85,10 @@ def describe_events(before: State, events: list[Event]) -> list[str]:
         return lines
 
     lines: list[str] = []
-    for e in events:
+    for index, e in enumerate(events):
+        if only is not None and index not in only:
+            apply_event(state, e)
+            continue
         if e.entity_type == "deliverable":
             name = _name(state, "deliverable", e.entity_id)
             if e.operation == "create":

@@ -1,4 +1,4 @@
-import type { Attendee, Baseline, Category, Change, CommitSummary, Diff, ItemInput, Meeting, Metrics, PlanState, Preview, Project, RegisterItem, ValidationError } from "../types";
+import type { Attendee, Baseline, Category, Change, CommitSummary, DeliverableTrail, Diff, ItemInput, Meeting, Metrics, PlanState, PreRead, Preview, Project, RegisterItem, Surprises, ValidationError } from "../types";
 
 export class ApiError extends Error {
   status: number;
@@ -107,6 +107,9 @@ export const api = {
   finishMeeting: (id: string, meetingId: number, input: FinishMeetingInput) =>
     post<{ meeting: Meeting; commit: CommitResult | null }>(`/projects/${id}/meetings/${meetingId}/finish`, input),
   register: (id: string) => request<RegisterItem[]>(`/projects/${id}/register`),
+  preread: (id: string, meetingId: number) => request<PreRead>(`/projects/${id}/meetings/${meetingId}/preread`),
+  trail: (id: string, deliverableId: string) => request<DeliverableTrail>(`/projects/${id}/deliverables/${encodeURIComponent(deliverableId)}/trail`),
+  surprises: (id: string) => request<Surprises>(`/projects/${id}/surprises`),
   createItem: (id: string, input: ItemInput) => post<RegisterItem>(`/projects/${id}/register`, input),
   updateItem: (id: string, itemId: number, input: ItemUpdate) => patch<RegisterItem>(`/projects/${id}/register/${itemId}`, input),
 };

@@ -6,8 +6,12 @@ import { appendToNotes, copilotPrompt, importRecap } from "../state/recap";
 import type { MeetingsStore } from "../state/useMeetings";
 import type { Deliverable, ItemKind, Meeting } from "../types";
 import { ItemRow, KindTag, isOverdue } from "./RegisterPanel";
+import { PreReadPanel } from "./Trail";
 
 interface Props {
+  projectId: string;
+  /** Changes when the plan or register does, so the pre-read reloads. */
+  refreshKey: string;
   store: MeetingsStore;
   /** Deliverables as staged, so new ones can be mentioned. */
   deliverables: Deliverable[];
@@ -189,6 +193,17 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
           <input type="date" value={meeting.held_on} disabled={finished} onChange={(e) => e.target.value && store.edit(meeting.id, { held_on: e.target.value })} />
         </label>
       </div>
+
+      {!finished && (
+        <PreReadPanel
+          projectId={props.projectId}
+          meetingId={meeting.id}
+          title={meeting.title}
+          refreshKey={`${props.refreshKey}|${meeting.held_on}|${meeting.title}`}
+          onViewCommit={props.onViewCommit}
+          onSelectDeliverable={props.onSelectDeliverable}
+        />
+      )}
 
       <section className="meeting-section">
         <h3>

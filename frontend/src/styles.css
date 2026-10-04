@@ -2165,3 +2165,192 @@ button.done-btn:hover:not(:disabled) {
   cursor: pointer;
   color: var(--text-2);
 }
+
+/* --- Trail, pre-read, surprise index ---------------------------------------------------- */
+.signal-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.signal-tag.agreed {
+  background: var(--decision-bg);
+  color: var(--decision);
+}
+.signal-tag.foreseen {
+  background: var(--added-bg);
+  color: var(--added);
+}
+.signal-tag.surprise {
+  background: var(--error-bg);
+  color: var(--error);
+}
+.trail {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trail h3 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+}
+.trail-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.trail-entry {
+  position: relative;
+  padding: 0 0 14px 20px;
+  font-size: 13px;
+}
+.trail-entry::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  border-left: 2px solid var(--border);
+}
+.trail-entry:last-child::before {
+  display: none;
+}
+.trail-node {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+}
+.trail-entry.commit .trail-node {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.trail-entry.meeting .trail-node {
+  border-color: var(--decision);
+}
+.trail-list.compact .trail-entry {
+  padding-left: 0;
+}
+.trail-list.compact .trail-entry::before {
+  display: none;
+}
+.trail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.trail-lines {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.trail-quote {
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+.trail-item {
+  margin: 4px 0 0;
+}
+.preread {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 8px 10px;
+}
+.preread summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.preread-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.preread h4 {
+  margin: 8px 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+}
+.agenda {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.overdue-text {
+  color: var(--error);
+  font-weight: 600;
+}
+.behind-text {
+  color: var(--warn);
+  font-weight: 600;
+}
+.surprise-index .signal-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  gap: 2px;
+  margin: 8px 0 6px;
+}
+.seg {
+  display: inline-block;
+}
+.seg.agreed {
+  background: var(--decision);
+}
+.seg.foreseen {
+  background: var(--added);
+}
+.seg.surprise {
+  background: var(--error);
+}
+.signal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-2);
+}
+.signal-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  margin-right: 3px;
+}
+.surprise-list {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
