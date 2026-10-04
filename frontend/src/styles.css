@@ -2070,3 +2070,54 @@ button.done-btn:hover:not(:disabled) {
 .register > button.secondary {
   align-self: flex-start;
 }
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.recap-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.recap-import .seg-toggle {
+  align-self: flex-start;
+  background: var(--surface);
+}
+.recap-input {
+  width: 100%;
+  resize: vertical;
+  font-size: 12px;
+}
+.recap-prompt {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.recap-preview {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.kind-tag.note {
+  background: var(--surface-3);
+  color: var(--muted);
+}
+.why {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+}
+.row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

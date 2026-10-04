@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { formatDate, formatTimestamp } from "../state/dates";
-import { itemsFromNotes, mention, parseNotes, setLineTag, TAGS, type ParsedLine } from "../state/notes";
+import { itemsFromNotes, mention, parseLine, parseNotes, setLineTag, TAGS, type ParsedLine } from "../state/notes";
+import { appendToNotes, copilotPrompt, importRecap } from "../state/recap";
 import type { MeetingsStore } from "../state/useMeetings";
 import type { Deliverable, ItemKind, Meeting } from "../types";
 import { ItemRow, KindTag, isOverdue } from "./RegisterPanel";
@@ -106,6 +107,7 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
   const finished = meeting.finished_at !== null;
   const notesRef = useRef<HTMLTextAreaElement>(null);
   const [newName, setNewName] = useState("");
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const lines = useMemo(() => parseNotes(meeting.notes, props.deliverables, meeting.held_on), [meeting.notes, props.deliverables, meeting.held_on]);
@@ -238,7 +240,25 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
       {error && <p className="callout error small">{error}</p>}
 
       <section className="meeting-section">
-        <h3>Notes</h3>
+        <div className="section-head">
+          <h3>Notes</h3>
+          {!finished && (
+            <button className="small secondary" aria-expanded={importing} onClick={() => setImporting((v) => !v)}>
+              {importing ? "Close import" : "Import recap"}
+            </button>
+          )}
+        </div>
+        {importing && (
+          <RecapImport
+            deliverables={props.deliverables}
+            people={meeting.attendees.map((a) => a.name)}
+            meetingDate={meeting.held_on}
+            onAdd={(added) => {
+              setNotes(appendToNotes(meeting.notes, added));
+              setImporting(false);
+            }}
+          />
+        )}
         <textarea
           ref={notesRef}
           className="notes-input"
@@ -364,5 +384,96 @@ function PickedLine(props: { line: ParsedLine; onTag: (kind: ItemKind | null) =>
         </span>
       </span>
     </li>
+  );
+}
+
+function RecapImport(props: {
+  deliverables: Deliverable[];
+  people: string[];
+  meetingDate: string;
+  onAdd: (lines: ReturnType<typeof importRecap>) => void;
+}) {
+  const [tab, setTab] = useState<"paste" | "prompt">("paste");
+  const [text, setText] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
+  const lines = useMemo(() => importRecap(text, props.deliverables, props.people), [text, props.deliverables, props.people]);
+  const prompt = useMemo(() => copilotPrompt(props.deliverables, props.people), [props.deliverables, props.people]);
+  const tagged = lines.filter((l) => /^(!action|\?risk|=decision)\b/i.test(l.line)).length;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied("Copied.");
+    } catch {
+      setCopied("Couldn't copy. Select the text and copy it.");
+    }
+  };
+
+  return (
+    <div className="recap-import">
+      <div className="seg-toggle" role="group" aria-label="Import">
+        <button aria-pressed={tab === "paste"} onClick={() => setTab("paste")}>
+          Paste recap
+        </button>
+        <button aria-pressed={tab === "prompt"} onClick={() => setTab("prompt")}>
+          Prompt for Copilot
+        </button>
+      </div>
+      {tab === "prompt" ? (
+        <>
+          <p className="small">
+            After the meeting, paste this into Copilot in Teams. Its answer comes back in Backstroke's format, so every line is tagged and linked when you paste it
+            here.
+          </p>
+          <pre className="recap-prompt">{prompt}</pre>
+          <div className="row-actions">
+            <button className="small" onClick={copy}>
+              Copy prompt
+            </button>
+            {copied && <span className="muted small">{copied}</span>}
+          </div>
+        </>
+      ) : (
+        <>
+          <textarea
+            className="recap-input"
+            rows={7}
+            value={text}
+            autoFocus
+            placeholder={"Paste a Copilot recap or anyone's notes.\nLines under “Follow-up tasks” become actions; lines that say “agreed” or “decided” become decisions."}
+            onChange={(e) => setText(e.target.value)}
+          />
+          {lines.length > 0 && (
+            <>
+              <h3>
+                Preview <span className="muted small">{lines.length} lines, {tagged} tagged</span>
+              </h3>
+              <ul className="picked recap-preview">
+                {lines.map((l, i) => {
+                  const parsed = parseLine(l.line, i, props.deliverables, props.meetingDate);
+                  return (
+                    <li key={i}>
+                      {parsed.kind ? <KindTag kind={parsed.kind} /> : <span className="kind-tag note">note</span>}
+                      <span className="picked-text">
+                        {parsed.text}
+                        {parsed.owner && <span className="muted small"> · {parsed.owner}</span>}
+                        {parsed.due_on && <span className="muted small"> · due {formatDate(parsed.due_on)}</span>}
+                        {l.why && <span className="why"> {l.why}</span>}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="muted small">Tags come from the recap's headings and plain keywords, and names are matched exactly. Fix any line in the notes afterwards.</p>
+            </>
+          )}
+          <div className="row-actions">
+            <button className="primary small" disabled={lines.length === 0} onClick={() => props.onAdd(lines)}>
+              Add {lines.length || ""} line{lines.length === 1 ? "" : "s"} to notes
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
