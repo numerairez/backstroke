@@ -25,6 +25,12 @@ import type { Category, Meeting, PlanState, Project } from "./types";
 
 type Tab = "inspect" | "changes" | "history" | "compare" | "metrics" | "meetings" | "register";
 const ZOOMS = [6, 10, 16, 26, 40];
+const SIDEBAR_DEFAULT = 380;
+const SIDEBAR_MIN = 300;
+/** The timeline keeps at least this much room when the sidebar is widened. */
+const TIMELINE_MIN = 360;
+
+const clampSidebar = (w: number) => Math.round(Math.max(SIDEBAR_MIN, Math.min(w, window.innerWidth - TIMELINE_MIN)));
 const PLAY_INTERVAL_MS = 1800;
 
 function stored(key: string, fallback: string): string {
@@ -53,6 +59,7 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [author, setAuthor] = useState(() => stored("backstroke:author", ""));
   const [zoom, setZoom] = useState(() => Number(stored("backstroke:zoom", "2")));
+  const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebar(Number(stored("backstroke:sidebar", String(SIDEBAR_DEFAULT))) || SIDEBAR_DEFAULT));
   const [colorBy, setColorBy] = useState<ColorBy>(() => (stored("backstroke:colorBy", "lane") === "phase" ? "phase" : "lane"));
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [tab, setTab] = useState<Tab>("inspect");
@@ -95,6 +102,32 @@ export default function App() {
   }, [projectId]);
   useEffect(() => store("backstroke:author", author), [author]);
   useEffect(() => store("backstroke:zoom", String(zoom)), [zoom]);
+  useEffect(() => store("backstroke:sidebar", String(sidebarWidth)), [sidebarWidth]);
+  useEffect(() => {
+    const onResize = () => setSidebarWidth((w) => clampSidebar(w));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const startSidebarResize = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    document.body.classList.add("resizing");
+    const onMove = (ev: PointerEvent) => setSidebarWidth(clampSidebar(startWidth + startX - ev.clientX));
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.classList.remove("resizing");
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  };
   useEffect(() => store("backstroke:colorBy", colorBy), [colorBy]);
   const toggleExpand = useCallback((id: string) => {
     setExpanded((cur) => {
@@ -405,7 +438,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="workspace">
+      <main className="workspace" style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}>
         <section className="timeline-wrap">
           {!showingLive && (
             <div className="history-banner">
@@ -488,6 +521,24 @@ export default function App() {
         </section>
 
         <aside className="sidebar">
+          <div
+            className="sidebar-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            aria-valuenow={sidebarWidth}
+            aria-valuemin={SIDEBAR_MIN}
+            tabIndex={0}
+            title="Drag to resize. Double-click to reset."
+            onPointerDown={startSidebarResize}
+            onDoubleClick={() => setSidebarWidth(clampSidebar(SIDEBAR_DEFAULT))}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                e.preventDefault();
+                setSidebarWidth((w) => clampSidebar(w + (e.key === "ArrowLeft" ? 24 : -24)));
+              }
+            }}
+          />
           <nav className="tabs" role="tablist">
             {(
               [

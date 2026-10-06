@@ -291,7 +291,7 @@ h4 {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) var(--sidebar-width, 380px);
   min-height: 0;
 }
 .timeline-wrap {
@@ -302,17 +302,50 @@ h4 {
   flex-direction: column;
 }
 .sidebar {
+  position: relative;
   border-left: 1px solid var(--border);
   background: var(--surface);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
+/* Drag handle on the sidebar's left edge. */
+.sidebar-resizer {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+body.resizing .sidebar-resizer::after {
+  background: var(--accent);
+}
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+/* Tabs wrap onto a second row rather than hiding off the edge. */
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
   padding: 0 6px;
-  overflow-x: auto;
 }
 .tabs button {
   border: none;
@@ -347,6 +380,9 @@ footer {
   .sidebar {
     border-left: none;
     border-top: 1px solid var(--border);
+  }
+  .sidebar-resizer {
+    display: none;
   }
   .versions,
   .tagline,
