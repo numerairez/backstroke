@@ -23,6 +23,15 @@ class Attendee(BaseModel):
     present: bool = True
 
 
+class PersonInput(BaseModel):
+    name: str
+    group: str | None = None
+
+
+class PeopleRequest(BaseModel):
+    people: list[PersonInput]
+
+
 class MeetingCreateRequest(BaseModel):
     title: str
     held_on: str

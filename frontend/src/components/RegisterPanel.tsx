@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { ApiError, type ItemUpdate } from "../api/client";
 import { formatDate } from "../state/dates";
-import type { Deliverable, ItemInput, ItemKind, RegisterItem } from "../types";
+import { groupsOf, membersOf } from "../state/people";
+import type { Deliverable, ItemInput, ItemKind, Person, RegisterItem } from "../types";
 
 const KIND_LABEL: Record<ItemKind, string> = { action: "Actions", risk: "Risks", decision: "Decisions" };
 
@@ -63,6 +64,7 @@ interface Props {
   register: RegisterItem[];
   deliverables: Deliverable[];
   today: string;
+  people: Person[];
   onSelectDeliverable: (id: string) => void;
   onCreate: (input: ItemInput) => Promise<RegisterItem>;
   onUpdate: (itemId: number, input: ItemUpdate) => Promise<RegisterItem>;
@@ -71,14 +73,24 @@ interface Props {
 export function RegisterPanel(props: Props) {
   const [kind, setKind] = useState<ItemKind | "all">("all");
   const [openOnly, setOpenOnly] = useState(true);
+  const [owner, setOwner] = useState("");
   const [adding, setAdding] = useState(false);
   const [superseding, setSuperseding] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const byId = useMemo(() => new Map(props.deliverables.map((d) => [d.id, d])), [props.deliverables]);
 
   const overdue = props.register.filter((i) => isOverdue(i, props.today)).length;
+  // A group matches items owned by the group or by anyone in it.
+  const owners = useMemo(() => {
+    if (!owner) return null;
+    const group = owner.startsWith("group:") ? owner.slice(6) : null;
+    return new Set((group ? [group, ...membersOf(props.people, group)] : [owner]).map((n) => n.toLowerCase()));
+  }, [owner, props.people]);
+  const ownerNames = [...new Set([...props.people.map((p) => p.name), ...props.register.flatMap((i) => (i.owner ? [i.owner] : []))])].filter(
+    (n) => !groupsOf(props.people).includes(n),
+  );
   const shown = props.register
-    .filter((i) => (kind === "all" || i.kind === kind) && (!openOnly || i.open))
+    .filter((i) => (kind === "all" || i.kind === kind) && (!openOnly || i.open) && (!owners || owners.has((i.owner ?? "").toLowerCase())))
     .sort((a, b) => Number(isOverdue(b, props.today)) - Number(isOverdue(a, props.today)) || b.id - a.id);
   const activeDecisions = props.register.filter((i) => i.kind === "decision" && i.open);
 
@@ -101,6 +113,25 @@ export function RegisterPanel(props: Props) {
             </button>
           ))}
         </div>
+        <select className="small" value={owner} aria-label="Owner" onChange={(e) => setOwner(e.target.value)}>
+          <option value="">Any owner</option>
+          {groupsOf(props.people).length > 0 && (
+            <optgroup label="Groups">
+              {groupsOf(props.people).map((g) => (
+                <option key={g} value={`group:${g}`}>
+                  {g}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <optgroup label="People">
+            {ownerNames.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </optgroup>
+        </select>
         <label className="toggle small">
           <input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} /> Open only
         </label>
@@ -115,6 +146,7 @@ export function RegisterPanel(props: Props) {
       {adding ? (
         <AddItemForm
           deliverables={props.deliverables}
+          people={props.people}
           onCancel={() => setAdding(false)}
           onAdd={(input) => run(async () => (await props.onCreate(input), setAdding(false)))}
         />
@@ -176,7 +208,7 @@ export function RegisterPanel(props: Props) {
   );
 }
 
-function AddItemForm(props: { deliverables: Deliverable[]; onAdd: (input: ItemInput) => void; onCancel: () => void }) {
+function AddItemForm(props: { deliverables: Deliverable[]; people: Person[]; onAdd: (input: ItemInput) => void; onCancel: () => void }) {
   const [kind, setKind] = useState<ItemKind>("action");
   const [text, setText] = useState("");
   const [owner, setOwner] = useState("");
@@ -206,7 +238,19 @@ function AddItemForm(props: { deliverables: Deliverable[]; onAdd: (input: ItemIn
         </label>
         <label className="field">
           <span>Owner</span>
-          <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Name" />
+          <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Name or group" list="register-owners" />
+          <datalist id="register-owners">
+            {props.people.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.group ?? ""}
+              </option>
+            ))}
+            {groupsOf(props.people).map((g) => (
+              <option key={`group:${g}`} value={g}>
+                group
+              </option>
+            ))}
+          </datalist>
         </label>
       </div>
       <label className="field">

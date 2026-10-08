@@ -3,10 +3,12 @@
 //   ?risk vendor may slip @[Data Mapping]       -> a risk on a deliverable
 //   =decision hold @[Go-Live] at 30 Oct         -> a decision
 // `@[Name]` names a deliverable. A bare `@Word` is a deliverable when it matches one with the
-// spaces removed (@DataMapping), otherwise a person. Everything here is deterministic.
+// spaces removed (@DataMapping), otherwise a person or group from the project's people (see
+// people.ts), or a name as written. Everything here is deterministic.
 
-import type { Deliverable, ItemInput, ItemKind } from "../types";
+import type { Deliverable, ItemInput, ItemKind, Person } from "../types";
 import { addDays, toDay, weekday } from "./dates";
+import { resolvePerson } from "./people";
 
 export const TAGS: Record<ItemKind, string> = { action: "!action", risk: "?risk", decision: "=decision" };
 const TAG_RE = /^(!action|\?risk|=decision)\b\s*/i;
@@ -65,7 +67,7 @@ export function parseDue(text: string, meetingDate: string): string | null {
   return at(year);
 }
 
-export function parseLine(line: string, index: number, deliverables: Deliverable[], meetingDate: string): ParsedLine {
+export function parseLine(line: string, index: number, deliverables: Deliverable[], meetingDate: string, people: Person[] = []): ParsedLine {
   let body = line.trim();
   let kind: ItemKind | null = null;
   const tag = body.match(TAG_RE);
@@ -83,7 +85,7 @@ export function parseLine(line: string, index: number, deliverables: Deliverable
       segments.push(d ? { type: "deliverable", id: d.id, name: d.name } : { type: "unknown", text: m[0], name: m[1].trim() });
     } else {
       const d = findDeliverable(deliverables, m[2], false);
-      segments.push(d ? { type: "deliverable", id: d.id, name: d.name } : { type: "person", name: m[2] });
+      segments.push(d ? { type: "deliverable", id: d.id, name: d.name } : { type: "person", name: resolvePerson(m[2], people) });
     }
     last = m.index + m[0].length;
   }
@@ -112,8 +114,8 @@ export function parseLine(line: string, index: number, deliverables: Deliverable
   };
 }
 
-export function parseNotes(notes: string, deliverables: Deliverable[], meetingDate: string): ParsedLine[] {
-  return notes.split("\n").map((line, i) => parseLine(line, i, deliverables, meetingDate));
+export function parseNotes(notes: string, deliverables: Deliverable[], meetingDate: string, people: Person[] = []): ParsedLine[] {
+  return notes.split("\n").map((line, i) => parseLine(line, i, deliverables, meetingDate, people));
 }
 
 /** The register items a meeting's notes would record. */

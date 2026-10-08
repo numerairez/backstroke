@@ -177,3 +177,16 @@ class RegisterItem(Base):
     superseded_by_id: Mapped[int | None] = mapped_column(ForeignKey("register_items.id"), nullable=True)
     created_at: Mapped[str] = mapped_column(String)
     updated_at: Mapped[str] = mapped_column(String)
+
+
+class Person(Base):
+    """Someone on the project, for picking attendees and owners. `group` is a team such as "Data"."""
+
+    __tablename__ = "project_people"
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String)
+    group: Mapped[str | None] = mapped_column(String, nullable=True)
+    position: Mapped[int] = mapped_column(Integer)

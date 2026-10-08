@@ -3,12 +3,14 @@ import { ApiError } from "../api/client";
 import { formatDate } from "../state/dates";
 import { itemsFromNotes, parseNotes, reasonFromDecisions } from "../state/notes";
 import { describeChange } from "../state/staging";
-import type { Category, Change, Deliverable, Meeting, PlanState, Preview } from "../types";
+import type { Category, Change, Deliverable, Meeting, PlanState, Preview, Person } from "../types";
 import { KindTag } from "./RegisterPanel";
 
 interface Props {
   meeting: Meeting;
   deliverables: Deliverable[];
+  /** The project's people, so @handles read as their names. */
+  people: Person[];
   /** The staged changes selected for the next commit. */
   staged: Change[];
   persisted: PlanState;
@@ -25,8 +27,8 @@ interface Props {
 
 export function FinishMeetingDialog(props: Props) {
   const items = useMemo(
-    () => itemsFromNotes(parseNotes(props.meeting.notes, props.deliverables, props.meeting.held_on)),
-    [props.meeting, props.deliverables],
+    () => itemsFromNotes(parseNotes(props.meeting.notes, props.deliverables, props.meeting.held_on, props.people)),
+    [props.meeting, props.deliverables, props.people],
   );
   const hasChanges = props.staged.length > 0;
   const [withCommit, setWithCommit] = useState(hasChanges);

@@ -18,7 +18,7 @@ from ..domain.models import Commit, Meeting
 from ..domain.phases import phase_spans
 from ..domain.status import deliverable_status, status_label
 from ..domain.validators import REASON_CATEGORIES
-from . import history_service, meeting_service, project_service, projection_service, version_service
+from . import history_service, meeting_service, people_service, project_service, projection_service, version_service
 from .commit_service import require_project
 
 CATEGORY_LABELS = {c["code"]: c["label"] for c in REASON_CATEGORIES}
@@ -162,6 +162,7 @@ def build_markdown(
     workstreams = {w["id"]: w for w in plan["workstreams"]}
     baselines = project_service.list_baselines(session, project_id)
     meetings = meeting_service.list_meetings(session, project_id)
+    people = people_service.list_people(session, project_id)
     register = meeting_service.list_items(session, project_id)
     meeting_by_commit = {
         seq: f"{title} {held_on}"
@@ -279,6 +280,16 @@ def build_markdown(
             events = [Event(e["entity_type"], e["entity_id"], e["operation"], e["field_name"], e["old_value"], e["new_value"]) for e in c["events"]]
             for line in describe_events(states.get(c["seq"] - 1, empty_state()), events):
                 add(f"- {line}")
+        add("")
+
+    if people:
+        add("## People")
+        add("")
+        teams: dict[str, list[str]] = {}
+        for person in people:
+            teams.setdefault(person["group"] or "", []).append(person["name"])
+        for team, names in sorted(teams.items(), key=lambda t: (t[0] == "", t[0].lower())):
+            add(f"- {team or 'No group'}: {', '.join(names)}")
         add("")
 
     add("## Meetings")

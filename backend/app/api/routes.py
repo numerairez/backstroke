@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, RevertRequest
 from ..domain.events import serialize_state
-from ..domain.meetings import FinishMeetingRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest
+from ..domain.meetings import FinishMeetingRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest, PeopleRequest
 from ..domain.validators import REASON_CATEGORIES
-from ..services import commit_service, diff_service, history_service, knowledge_service, meeting_service, trail_service, metrics_service, project_service, projection_service, version_service
+from ..services import commit_service, diff_service, history_service, knowledge_service, meeting_service, people_service, trail_service, metrics_service, project_service, projection_service, version_service
 from ..services.commit_service import NotFound, VersionConflict
 
 router = APIRouter(prefix="/api")
@@ -174,6 +174,7 @@ def export_project(project_id: str, session: Session = Depends(get_session)) -> 
         "project": {"id": project.id, "name": project.name, "description": project.description, "created_at": project.created_at},
         "baselines": project_service.list_baselines(session, project_id),
         "commits": history_service.list_commits(session, project_id, include_events=True),
+        "people": people_service.list_people(session, project_id),
         "meetings": meeting_service.list_meetings(session, project_id),
         "register": meeting_service.list_items(session, project_id),
     }
@@ -193,6 +194,19 @@ def export_knowledge(
         session, project_id, today=as_of, include_history=history, include_notes=notes, include_closed=closed
     )
     return PlainTextResponse(markdown, media_type="text/markdown; charset=utf-8")
+
+
+@router.get("/projects/{project_id}/people")
+def list_people(project_id: str, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return people_service.list_people(session, project_id)
+
+
+@router.put("/projects/{project_id}/people")
+def replace_people(project_id: str, body: PeopleRequest, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    """Save the whole list. Order is kept; names are unique ignoring case."""
+    people = people_service.replace_people(session, project_id, body.people)
+    session.commit()
+    return people
 
 
 @router.get("/projects/{project_id}/meetings")

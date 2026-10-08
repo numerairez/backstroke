@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { formatDate, formatTimestamp } from "../state/dates";
 import { itemsFromNotes, mention, parseLine, parseNotes, setLineTag, TAGS, type ParsedLine } from "../state/notes";
+import { groupsOf, knownNames, membersOf, mentionAt, suggestPeople } from "../state/people";
 import { appendToNotes, copilotPrompt, importRecap } from "../state/recap";
 import type { MeetingsStore } from "../state/useMeetings";
-import type { Deliverable, ItemKind, Meeting } from "../types";
+import type { Deliverable, ItemKind, Meeting, Person } from "../types";
 import { ItemRow, KindTag, isOverdue } from "./RegisterPanel";
 import { PreReadPanel } from "./Trail";
 
@@ -113,8 +114,9 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
   const [newName, setNewName] = useState("");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const people = store.people;
 
-  const lines = useMemo(() => parseNotes(meeting.notes, props.deliverables, meeting.held_on), [meeting.notes, props.deliverables, meeting.held_on]);
+  const lines = useMemo(() => parseNotes(meeting.notes, props.deliverables, meeting.held_on, people), [meeting.notes, props.deliverables, meeting.held_on, people]);
   const items = useMemo(() => itemsFromNotes(lines), [lines]);
   const byId = useMemo(() => new Map(props.deliverables.map((d) => [d.id, d])), [props.deliverables]);
   const carried = store.register.filter((i) => i.kind === "action" && i.open && i.meeting?.id !== meeting.id);
@@ -149,13 +151,20 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
   };
 
   const setAttendees = (attendees: Meeting["attendees"]) => store.edit(meeting.id, { attendees });
+  const attending = (name: string) => meeting.attendees.some((a) => a.name.toLowerCase() === name.toLowerCase());
+  const addAttendees = (names: string[]) => {
+    const add = [...new Set(names.map((n) => n.trim()).filter((n) => n && !attending(n)))];
+    if (add.length) setAttendees([...meeting.attendees, ...add.map((name) => ({ name, present: true }))]);
+  };
   const addAttendee = (e: React.FormEvent) => {
     e.preventDefault();
     const name = newName.trim();
-    if (!name || meeting.attendees.some((a) => a.name.toLowerCase() === name.toLowerCase())) return;
-    setAttendees([...meeting.attendees, { name, present: true }]);
+    // A group's name adds everyone in it.
+    const group = groupsOf(people).find((g) => g.toLowerCase() === name.toLowerCase());
+    addAttendees(group ? membersOf(people, group) : [name]);
     setNewName("");
   };
+  const groupsToAdd = groupsOf(people).filter((g) => membersOf(people, g).some((n) => !attending(n)));
 
   const markDone = async (itemId: number) => {
     setError(null);
@@ -225,8 +234,27 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
             </span>
           ))}
           <form onSubmit={addAttendee} className="attendee-add">
-            <input value={newName} placeholder="Add name" aria-label="Add attendee" onChange={(e) => setNewName(e.target.value)} />
+            <input value={newName} placeholder="Add name" aria-label="Add attendee" list="meeting-people" onChange={(e) => setNewName(e.target.value)} />
+            <datalist id="meeting-people">
+              {people
+                .filter((p) => !attending(p.name))
+                .map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.group ?? ""}
+                  </option>
+                ))}
+              {groupsToAdd.map((g) => (
+                <option key={`group:${g}`} value={g}>
+                  group: {membersOf(people, g).join(", ")}
+                </option>
+              ))}
+            </datalist>
           </form>
+          {groupsToAdd.map((g) => (
+            <button key={g} className="attendee group-add small" title={`Add ${membersOf(people, g).filter((n) => !attending(n)).join(", ")}`} onClick={() => addAttendees(membersOf(people, g))}>
+              + {g}
+            </button>
+          ))}
         </div>
       </section>
 
@@ -266,7 +294,8 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
         {importing && (
           <RecapImport
             deliverables={props.deliverables}
-            people={meeting.attendees.map((a) => a.name)}
+            people={knownNames(people, meeting.attendees.map((a) => a.name))}
+            roster={people}
             meetingDate={meeting.held_on}
             onAdd={(added) => {
               setNotes(appendToNotes(meeting.notes, added));
@@ -274,14 +303,15 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
             }}
           />
         )}
-        <textarea
-          ref={notesRef}
+        <MentionTextarea
+          textareaRef={notesRef}
           className="notes-input"
           rows={12}
           value={meeting.notes}
+          people={people}
           spellCheck
-          placeholder={"One point per line. Start a line with !action, ?risk or =decision.\nClick a bar on the timeline to mention it."}
-          onChange={(e) => setNotes(e.target.value)}
+          placeholder={"One point per line. Start a line with !action, ?risk or =decision.\nClick a bar on the timeline to mention it. Type @ to tag someone."}
+          onChange={setNotes}
           onBlur={() => void store.flush()}
         />
         {!finished && (
@@ -293,7 +323,7 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
               </button>
             ))}
             <span className="muted">
-              <code>@Ravi</code> assigns · <code>by Fri</code> sets a due date
+              <code>@Ravi</code> or a group assigns · <code>by Fri</code> sets a due date
             </span>
           </div>
         )}
@@ -405,6 +435,7 @@ function PickedLine(props: { line: ParsedLine; onTag: (kind: ItemKind | null) =>
 function RecapImport(props: {
   deliverables: Deliverable[];
   people: string[];
+  roster: Person[];
   meetingDate: string;
   onAdd: (lines: ReturnType<typeof importRecap>) => void;
 }) {
@@ -465,7 +496,7 @@ function RecapImport(props: {
               </h3>
               <ul className="picked recap-preview">
                 {lines.map((l, i) => {
-                  const parsed = parseLine(l.line, i, props.deliverables, props.meetingDate);
+                  const parsed = parseLine(l.line, i, props.deliverables, props.meetingDate, props.roster);
                   return (
                     <li key={i}>
                       {parsed.kind ? <KindTag kind={parsed.kind} /> : <span className="kind-tag note">note</span>}
@@ -490,5 +521,87 @@ function RecapImport(props: {
         </>
       )}
     </div>
+  );
+}
+
+/** A textarea that offers the project's people and groups after an @, written as their tag. */
+function MentionTextarea(
+  props: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, "onChange" | "value"> & {
+    textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+    value: string;
+    people: Person[];
+    onChange: (value: string) => void;
+  },
+) {
+  const { textareaRef, value, people, onChange, ...rest } = props;
+  const [caret, setCaret] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const [dismissed, setDismissed] = useState<number | null>(null);
+
+  const at = caret === null ? null : mentionAt(value, caret);
+  const options = at && at.start !== dismissed ? suggestPeople(at.query, people) : [];
+  const open = options.length > 0;
+  useEffect(() => setActive(0), [at?.start, at?.query]);
+
+  const track = (el: HTMLTextAreaElement) => setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null);
+  const accept = (handle: string) => {
+    const el = textareaRef.current;
+    if (!at || caret === null || !el) return;
+    const insert = `@${handle} `;
+    const after = value.slice(caret).replace(/^\s/, "");
+    onChange(value.slice(0, at.start) + insert + after);
+    const to = at.start + insert.length;
+    setCaret(to);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(to, to);
+    });
+  };
+
+  return (
+    <>
+      <textarea
+        {...rest}
+        ref={textareaRef}
+        value={value}
+        aria-autocomplete="list"
+        aria-expanded={open}
+        onChange={(e) => (onChange(e.target.value), track(e.target))}
+        onSelect={(e) => track(e.currentTarget)}
+        onBlur={(e) => (setCaret(null), rest.onBlur?.(e))}
+        onKeyDown={(e) => {
+          if (!open) return;
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((i) => (i + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
+          } else if (e.key === "Enter" || e.key === "Tab") {
+            e.preventDefault();
+            accept(options[active].handle);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setDismissed(at!.start);
+          }
+        }}
+      />
+      {open && (
+        <ul className="mention-menu" role="listbox" aria-label="People">
+          {options.map((o, i) => (
+            <li key={`${o.label}|${o.detail}`}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={i === active}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => accept(o.handle)}
+              >
+                <span>{o.label}</span>
+                <span className="muted small">{o.detail}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

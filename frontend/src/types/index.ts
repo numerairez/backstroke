@@ -230,6 +230,12 @@ export interface Metrics {
 
 export type ItemKind = "action" | "risk" | "decision";
 
+/** Someone on the project. `group` is a team, e.g. "Data". */
+export interface Person {
+  name: string;
+  group: string | null;
+}
+
 export interface Attendee {
   name: string;
   present: boolean;

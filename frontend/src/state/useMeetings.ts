@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ItemUpdate } from "../api/client";
-import type { Attendee, ItemInput, Meeting, RegisterItem } from "../types";
+import type { Attendee, ItemInput, Meeting, Person, RegisterItem } from "../types";
 
 export type SaveState = "saved" | "saving" | "failed";
 
 export interface MeetingsStore {
   meetings: Meeting[];
   register: RegisterItem[];
+  /** The project's people, offered when adding attendees and owners. */
+  people: Person[];
   error: string | null;
   saveState: SaveState;
   reload: () => Promise<void>;
@@ -20,6 +22,7 @@ export interface MeetingsStore {
   finished: (meeting: Meeting) => Promise<void>;
   createItem: (input: ItemInput) => Promise<RegisterItem>;
   updateItem: (itemId: number, input: ItemUpdate) => Promise<RegisterItem>;
+  savePeople: (people: Person[]) => Promise<Person[]>;
 }
 
 const SAVE_DELAY_MS = 700;
@@ -27,6 +30,7 @@ const SAVE_DELAY_MS = 700;
 export function useMeetings(projectId: string | null): MeetingsStore {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [register, setRegister] = useState<RegisterItem[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const pending = useRef(new Map<number, Record<string, unknown>>());
@@ -34,9 +38,10 @@ export function useMeetings(projectId: string | null): MeetingsStore {
 
   const reload = useCallback(async () => {
     if (!projectId) return;
-    const [ms, items] = await Promise.all([api.meetings(projectId), api.register(projectId)]);
+    const [ms, items, ps] = await Promise.all([api.meetings(projectId), api.register(projectId), api.people(projectId)]);
     setMeetings(ms);
     setRegister(items);
+    setPeople(ps);
   }, [projectId]);
 
   const flush = useCallback(async () => {
@@ -59,6 +64,7 @@ export function useMeetings(projectId: string | null): MeetingsStore {
   useEffect(() => {
     setMeetings([]);
     setRegister([]);
+    setPeople([]);
     setError(null);
     pending.current.clear();
     reload().catch((e: Error) => setError(e.message));
@@ -134,5 +140,15 @@ export function useMeetings(projectId: string | null): MeetingsStore {
     [projectId],
   );
 
-  return { meetings, register, error, saveState, reload, create, edit, flush, remove, finished, createItem, updateItem };
+  const savePeople = useCallback(
+    async (list: Person[]) => {
+      if (!projectId) throw new Error("no project");
+      const saved = await api.savePeople(projectId, list);
+      setPeople(saved);
+      return saved;
+    },
+    [projectId],
+  );
+
+  return { meetings, register, people, error, saveState, reload, create, edit, flush, remove, finished, createItem, updateItem, savePeople };
 }

@@ -1,4 +1,4 @@
-import type { Attendee, Baseline, Category, Change, CommitSummary, DeliverableTrail, Diff, ItemInput, Meeting, Metrics, PlanState, PreRead, Preview, Project, RegisterItem, Surprises, ValidationError } from "../types";
+import type { Attendee, Baseline, Category, Change, CommitSummary, DeliverableTrail, Diff, ItemInput, Meeting, Metrics, Person, PlanState, PreRead, Preview, Project, RegisterItem, Surprises, ValidationError } from "../types";
 
 export class ApiError extends Error {
   status: number;
@@ -99,6 +99,8 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, { message: `Couldn't build the knowledge base (HTTP ${res.status})` });
     return res.text();
   },
+  people: (id: string) => request<Person[]>(`/projects/${id}/people`),
+  savePeople: (id: string, people: Person[]) => request<Person[]>(`/projects/${id}/people`, { method: "PUT", body: JSON.stringify({ people }) }),
   meetings: (id: string) => request<Meeting[]>(`/projects/${id}/meetings`),
   createMeeting: (id: string, input: { title: string; held_on: string; attendees?: Attendee[] }) => post<Meeting>(`/projects/${id}/meetings`, input),
   updateMeeting: (id: string, meetingId: number, input: { title?: string; held_on?: string; attendees?: Attendee[]; notes?: string }) =>

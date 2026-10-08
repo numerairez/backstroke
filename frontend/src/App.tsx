@@ -5,6 +5,7 @@ import { FinishMeetingDialog } from "./components/FinishMeetingDialog";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { KnowledgeDialog } from "./components/KnowledgeDialog";
 import { MeetingsPanel } from "./components/MeetingsPanel";
+import { PeoplePanel } from "./components/PeoplePanel";
 import { RegisterPanel, isOverdue } from "./components/RegisterPanel";
 import { DeliverableHistory, SurpriseIndex } from "./components/Trail";
 import { StagedChangesDrawer } from "./components/StagedChangesDrawer";
@@ -23,7 +24,7 @@ import { deliverableStatus, type StatusKind } from "./state/status";
 import { TimelineCanvas, type ColorBy } from "./timeline/TimelineCanvas";
 import type { Category, Meeting, PlanState, Project } from "./types";
 
-type Tab = "inspect" | "changes" | "history" | "compare" | "metrics" | "meetings" | "register";
+type Tab = "inspect" | "changes" | "history" | "compare" | "metrics" | "meetings" | "register" | "people";
 const ZOOMS = [6, 10, 16, 26, 40];
 const SIDEBAR_DEFAULT = 380;
 const SIDEBAR_MIN = 300;
@@ -549,6 +550,7 @@ export default function App() {
                 ["metrics", "Metrics"],
                 ["meetings", "Meetings"],
                 ["register", `Register${overdueActions ? ` (${overdueActions} overdue)` : ""}`],
+                ["people", "People"],
               ] as [Tab, string][]
             ).map(([key, label]) => (
               <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
@@ -665,8 +667,21 @@ export default function App() {
                 deliverables={p.persisted.deliverables}
                 today={today}
                 onSelectDeliverable={select}
+                people={meetings.people}
                 onCreate={meetings.createItem}
                 onUpdate={meetings.updateItem}
+              />
+            )}
+            {tab === "people" && projectId && (
+              <PeoplePanel
+                people={meetings.people}
+                unlisted={[
+                  ...new Set([
+                    ...meetings.meetings.flatMap((m) => m.attendees.map((a) => a.name)),
+                    ...meetings.register.flatMap((i) => (i.owner ? [i.owner] : [])),
+                  ]),
+                ].filter((n) => !meetings.people.some((x) => x.name.toLowerCase() === n.toLowerCase() || x.group?.toLowerCase() === n.toLowerCase()))}
+                onSave={meetings.savePeople}
               />
             )}
           </div>
@@ -719,6 +734,7 @@ export default function App() {
         <FinishMeetingDialog
           meeting={meetings.meetings.find((m) => m.id === finishing.id) ?? finishing}
           deliverables={p.proposed.deliverables}
+          people={meetings.people}
           staged={p.selection.changes}
           persisted={p.persisted}
           proposed={p.proposed}
@@ -731,7 +747,7 @@ export default function App() {
           onClose={() => setFinishing(null)}
           onFinish={async ({ author: who, withCommit, reason, category }) => {
             const m = meetings.meetings.find((x) => x.id === finishing.id) ?? finishing;
-            const items = itemsFromNotes(parseNotes(m.notes, p.proposed.deliverables, m.held_on)).map(({ line: _line, ...item }) => item);
+            const items = itemsFromNotes(parseNotes(m.notes, p.proposed.deliverables, m.held_on, meetings.people)).map(({ line: _line, ...item }) => item);
             const result = await p.finishMeeting(m.id, { author: who, items, commit: withCommit ? { reason, category } : null });
             await meetings.finished(result.meeting);
             setFinishing(null);

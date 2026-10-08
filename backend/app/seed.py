@@ -19,9 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .domain.commands import Change
-from .domain.meetings import Attendee, FinishMeetingRequest, ItemInput, ItemUpdateRequest
+from .domain.meetings import Attendee, FinishMeetingRequest, ItemInput, ItemUpdateRequest, PersonInput
 from .domain.models import Commit, Project
-from .services import commit_service, meeting_service, project_service
+from .services import commit_service, meeting_service, people_service, project_service
 
 PROJECT_ID = "example-program"
 AUTHOR = "Priya (PMO)"
@@ -205,6 +205,7 @@ CHECKOUT_PROGRESS = [
 
 
 PEOPLE = ["Priya", "Dana", "Ravi", "Marco", "Jo", "Lena"]
+GROUPS = {"Priya": "PMO", "Dana": "Business", "Ravi": "Data", "Marco": "AI agent", "Jo": "AI agent", "Lena": "Business"}
 
 # Meetings for the example program: (title, date, finished at, absent, notes, items, linked commit, items done later).
 MEETINGS = [
@@ -253,6 +254,7 @@ MEETINGS = [
 
 
 def seed_meetings(session: Session) -> None:
+    people_service.replace_people(session, PROJECT_ID, [PersonInput(name=n, group=GROUPS[n]) for n in PEOPLE])
     for title, held_on, finished_at, absent, notes, items, seq, done in MEETINGS:
         attendees = [Attendee(name=n, present=n not in absent) for n in PEOPLE]
         meeting = meeting_service.create_meeting(session, PROJECT_ID, title, held_on, attendees, notes=notes, created_at=finished_at)
