@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, RevertRequest
 from ..domain.events import serialize_state
-from ..domain.meetings import FinishMeetingRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest, PeopleRequest
+from ..domain.meetings import FinishMeetingRequest, ItemCreateRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest, PeopleRequest
 from ..domain.validators import REASON_CATEGORIES
 from ..services import commit_service, diff_service, history_service, knowledge_service, meeting_service, people_service, trail_service, metrics_service, project_service, projection_service, version_service
 from ..services.commit_service import NotFound, VersionConflict
@@ -197,14 +197,14 @@ def export_knowledge(
 
 
 @router.get("/projects/{project_id}/people")
-def list_people(project_id: str, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+def list_people(project_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     return people_service.list_people(session, project_id)
 
 
 @router.put("/projects/{project_id}/people")
-def replace_people(project_id: str, body: PeopleRequest, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
-    """Save the whole list. Order is kept; names are unique ignoring case."""
-    people = people_service.replace_people(session, project_id, body.people)
+def replace_people(project_id: str, body: PeopleRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Save the whole roster. Order is kept; people and groups are unique ignoring case."""
+    people = people_service.replace_people(session, project_id, body.people, body.groups)
     session.commit()
     return people
 
@@ -271,8 +271,8 @@ def list_register(project_id: str, session: Session = Depends(get_session)) -> l
 
 
 @router.post("/projects/{project_id}/register", status_code=201)
-def create_register_item(project_id: str, body: ItemInput, session: Session = Depends(get_session)) -> dict[str, Any]:
-    item = meeting_service.create_item(session, project_id, body)
+def create_register_item(project_id: str, body: ItemCreateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    item = meeting_service.create_item(session, project_id, ItemInput(**body.model_dump(exclude={"author"})), author=body.author)
     session.commit()
     return meeting_service.item_to_dict(session, item)
 
@@ -282,6 +282,12 @@ def update_register_item(project_id: str, item_id: int, body: ItemUpdateRequest,
     item = meeting_service.update_item(session, project_id, item_id, body)
     session.commit()
     return meeting_service.item_to_dict(session, item)
+
+
+@router.get("/projects/{project_id}/register/{item_id}/history")
+def register_item_history(project_id: str, item_id: int, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    """Every change to one item, oldest first. Closed items stay in the register; nothing is deleted."""
+    return meeting_service.item_history(session, project_id, item_id)
 
 
 def install_error_handlers(app) -> None:

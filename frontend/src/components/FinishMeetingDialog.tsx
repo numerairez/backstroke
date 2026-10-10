@@ -4,7 +4,7 @@ import { formatDate } from "../state/dates";
 import { itemsFromNotes, parseNotes, reasonFromDecisions } from "../state/notes";
 import { describeChange } from "../state/staging";
 import type { Category, Change, Deliverable, Meeting, PlanState, Preview, Person } from "../types";
-import { KindTag } from "./RegisterPanel";
+import { KindTag } from "./RegisterView";
 
 interface Props {
   meeting: Meeting;

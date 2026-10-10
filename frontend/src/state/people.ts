@@ -7,14 +7,15 @@ import type { Person } from "../types";
 const compact = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 const firstWord = (name: string) => name.trim().split(/\s+/)[0] ?? "";
 /** Letters, digits, - and _ only, so it reads back as one `@Word` token. */
-const tokenize = (s: string) => s.replace(/[^\w-]/g, "").replace(/^[^A-Za-z]+/, "");
+export const tokenize = (s: string) => s.replace(/[^\w-]/g, "").replace(/^[^A-Za-z]+/, "");
 
+/** Groups someone is in, in the order they first appear. */
 export function groupsOf(people: Person[]): string[] {
-  return [...new Set(people.flatMap((p) => (p.group ? [p.group] : [])))];
+  return [...new Set(people.flatMap((p) => p.groups))];
 }
 
 export function membersOf(people: Person[], group: string): string[] {
-  return people.filter((p) => p.group === group).map((p) => p.name);
+  return people.filter((p) => p.groups.includes(group)).map((p) => p.name);
 }
 
 /** How to tag someone in notes, without the @. */
@@ -45,7 +46,7 @@ export interface PersonSuggestion {
 export function suggestPeople(query: string, people: Person[], limit = 6): PersonSuggestion[] {
   const q = compact(query);
   const matches = (s: string) => !q || compact(s).startsWith(q) || s.split(/\s+/).some((w) => compact(w).startsWith(q));
-  const persons = people.filter((p) => matches(p.name)).map((p) => ({ label: p.name, handle: handle(p.name, people), detail: p.group ?? "" }));
+  const persons = people.filter((p) => matches(p.name)).map((p) => ({ label: p.name, handle: handle(p.name, people), detail: p.groups.join(", ") }));
   const groups = groupsOf(people)
     .filter(matches)
     .map((g) => ({ label: g, handle: tokenize(g), detail: `group · ${membersOf(people, g).length}` }));

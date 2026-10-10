@@ -53,6 +53,11 @@ describe("recap import", () => {
     expect(out.map((l) => l.line)).toEqual(["=decision @[Go-Live] stays on 30 Oct", "?risk Vendor may slip again"]);
   });
 
+  it("files issues and blockers as issues, but a mixed risks-and-issues section as risks", () => {
+    const out = importRecap("## Blockers\n- Test environment is down\n## Risks and issues\n- Vendor may slip again", DELIVERABLES, PEOPLE);
+    expect(out.map((l) => l.line)).toEqual(["!issue Test environment is down", "?risk Vendor may slip again"]);
+  });
+
   it("keeps short lines that aren't headings", () => {
     expect(importRecap("Budget OK\nRisks:\n- Vendor late", DELIVERABLES, PEOPLE).map((l) => l.line)).toEqual(["Budget OK", "?risk Vendor late"]);
   });

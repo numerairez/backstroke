@@ -158,7 +158,7 @@ class Meeting(Base):
 
 
 class RegisterItem(Base):
-    """An action, risk or decision. Numbered per project and kind: A-7, R-3, D-12."""
+    """An action, risk, issue or decision. Numbered per project and kind: A-7, R-3, I-2, D-12."""
 
     __tablename__ = "register_items"
     __table_args__ = (UniqueConstraint("project_id", "kind", "number"),)
@@ -173,14 +173,35 @@ class RegisterItem(Base):
     deliverable_ids: Mapped[list] = mapped_column(JSON, default=list)  # empty = programme-level
     meeting_id: Mapped[int | None] = mapped_column(ForeignKey("meetings.id"), nullable=True)
     status: Mapped[str] = mapped_column(String)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)  # why it closed: done, mitigated, happened...
     closed_on: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The item that followed this one: the decision that superseded it, or the issue a risk became.
     superseded_by_id: Mapped[int | None] = mapped_column(ForeignKey("register_items.id"), nullable=True)
     created_at: Mapped[str] = mapped_column(String)
     updated_at: Mapped[str] = mapped_column(String)
 
 
+class RegisterEvent(Base):
+    """One change to a register item, kept forever: raised, edited, closed or reopened.
+
+    `changes` maps each changed field to [old, new]; see HISTORY_FIELDS in domain/meetings.py.
+    """
+
+    __tablename__ = "register_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("register_items.id"), index=True)
+    type: Mapped[str] = mapped_column(String)
+    changes: Mapped[dict] = mapped_column(JSON, default=dict)
+    meeting_id: Mapped[int | None] = mapped_column(ForeignKey("meetings.id"), nullable=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String)
+
+
 class Person(Base):
-    """Someone on the project, for picking attendees and owners. `group` is a team such as "Data"."""
+    """Someone on the project, for picking attendees and owners. `groups` names the teams they're in, such as "Data"."""
 
     __tablename__ = "project_people"
     __table_args__ = (UniqueConstraint("project_id", "name"),)
@@ -188,5 +209,17 @@ class Person(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     name: Mapped[str] = mapped_column(String)
-    group: Mapped[str | None] = mapped_column(String, nullable=True)
+    groups: Mapped[list] = mapped_column(JSON, default=list)
+    position: Mapped[int] = mapped_column(Integer)
+
+
+class PersonGroup(Base):
+    """A team on the project. People join any number of them; a group can be empty."""
+
+    __tablename__ = "project_groups"
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String)
     position: Mapped[int] = mapped_column(Integer)

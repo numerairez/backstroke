@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ItemUpdate } from "../api/client";
-import type { Attendee, ItemInput, Meeting, Person, RegisterItem } from "../types";
+import type { Attendee, ItemInput, Meeting, Person, RegisterItem, Roster } from "../types";
 
 export type SaveState = "saved" | "saving" | "failed";
 
@@ -9,6 +9,8 @@ export interface MeetingsStore {
   register: RegisterItem[];
   /** The project's people, offered when adding attendees and owners. */
   people: Person[];
+  /** The project's groups in their saved order, including empty ones. */
+  groups: string[];
   error: string | null;
   saveState: SaveState;
   reload: () => Promise<void>;
@@ -20,9 +22,9 @@ export interface MeetingsStore {
   remove: (meetingId: number) => Promise<void>;
   /** Put a finished meeting in place and reload the register its items went into. */
   finished: (meeting: Meeting) => Promise<void>;
-  createItem: (input: ItemInput) => Promise<RegisterItem>;
+  createItem: (input: ItemInput & { author?: string }) => Promise<RegisterItem>;
   updateItem: (itemId: number, input: ItemUpdate) => Promise<RegisterItem>;
-  savePeople: (people: Person[]) => Promise<Person[]>;
+  savePeople: (roster: Roster) => Promise<Roster>;
 }
 
 const SAVE_DELAY_MS = 700;
@@ -31,6 +33,7 @@ export function useMeetings(projectId: string | null): MeetingsStore {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [register, setRegister] = useState<RegisterItem[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const pending = useRef(new Map<number, Record<string, unknown>>());
@@ -41,7 +44,8 @@ export function useMeetings(projectId: string | null): MeetingsStore {
     const [ms, items, ps] = await Promise.all([api.meetings(projectId), api.register(projectId), api.people(projectId)]);
     setMeetings(ms);
     setRegister(items);
-    setPeople(ps);
+    setPeople(ps.people);
+    setGroups(ps.groups);
   }, [projectId]);
 
   const flush = useCallback(async () => {
@@ -65,6 +69,7 @@ export function useMeetings(projectId: string | null): MeetingsStore {
     setMeetings([]);
     setRegister([]);
     setPeople([]);
+    setGroups([]);
     setError(null);
     pending.current.clear();
     reload().catch((e: Error) => setError(e.message));
@@ -120,7 +125,7 @@ export function useMeetings(projectId: string | null): MeetingsStore {
   );
 
   const createItem = useCallback(
-    async (input: ItemInput) => {
+    async (input: ItemInput & { author?: string }) => {
       if (!projectId) throw new Error("no project");
       const item = await api.createItem(projectId, input);
       setRegister((r) => [...r, item]);
@@ -133,7 +138,9 @@ export function useMeetings(projectId: string | null): MeetingsStore {
     async (itemId: number, input: ItemUpdate) => {
       if (!projectId) throw new Error("no project");
       const item = await api.updateItem(projectId, itemId, input);
-      setRegister((r) => r.map((x) => (x.id === item.id ? item : x)));
+      // A risk that happens raises or links an issue, and reopening unlinks it: other rows change too.
+      if (item.kind === "risk" && (input.outcome || input.status)) setRegister(await api.register(projectId));
+      else setRegister((r) => r.map((x) => (x.id === item.id ? item : x)));
       setMeetings((ms) => ms.map((m) => ({ ...m, items: m.items.map((x) => (x.id === item.id ? item : x)) })));
       return item;
     },
@@ -141,14 +148,15 @@ export function useMeetings(projectId: string | null): MeetingsStore {
   );
 
   const savePeople = useCallback(
-    async (list: Person[]) => {
+    async (roster: Roster) => {
       if (!projectId) throw new Error("no project");
-      const saved = await api.savePeople(projectId, list);
-      setPeople(saved);
+      const saved = await api.savePeople(projectId, roster);
+      setPeople(saved.people);
+      setGroups(saved.groups);
       return saved;
     },
     [projectId],
   );
 
-  return { meetings, register, people, error, saveState, reload, create, edit, flush, remove, finished, createItem, updateItem, savePeople };
+  return { meetings, register, people, groups, error, saveState, reload, create, edit, flush, remove, finished, createItem, updateItem, savePeople };
 }

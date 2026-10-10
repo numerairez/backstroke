@@ -228,12 +228,26 @@ export interface Metrics {
   };
 }
 
-export type ItemKind = "action" | "risk" | "decision";
+export type ItemKind = "action" | "risk" | "issue" | "decision";
 
-/** Someone on the project. `group` is a team, e.g. "Data". */
+/** Why an item closed. A risk that happened names the issue it became. */
+export const OUTCOMES: Record<ItemKind, string[]> = {
+  action: ["done", "dropped"],
+  risk: ["mitigated", "passed", "accepted", "happened"],
+  issue: ["resolved", "accepted"],
+  decision: ["superseded"],
+};
+
+/** Someone on the project, in any number of teams such as "Data". */
 export interface Person {
   name: string;
-  group: string | null;
+  groups: string[];
+}
+
+/** The project's people and its groups, in order. A group can have no one in it yet. */
+export interface Roster {
+  people: Person[];
+  groups: string[];
 }
 
 export interface Attendee {
@@ -241,7 +255,7 @@ export interface Attendee {
   present: boolean;
 }
 
-/** An action, risk or decision. `ref` is its register number, e.g. "A-7". */
+/** An action, risk, issue or decision. `ref` is its register number, e.g. "A-7". */
 export interface RegisterItem {
   id: number;
   ref: string;
@@ -254,9 +268,30 @@ export interface RegisterItem {
   meeting: { id: number; title: string; held_on: string } | null;
   status: string;
   open: boolean;
+  /** Why it closed, one of OUTCOMES; null while open. */
+  outcome: string | null;
   closed_on: string | null;
+  /** The decision that superseded this one. */
   superseded_by: string | null;
+  /** The issue this risk became when it happened. */
+  became: string | null;
+  /** The risks this issue came from. */
+  raised_from: string[];
   created_at: string;
+}
+
+/** One change to a register item. `changes` maps each field to [old, new]. */
+export interface ItemEvent {
+  id: number;
+  type: "raised" | "edited" | "closed" | "reopened";
+  at: string;
+  /** The day it happened; a closure can be recorded later than it closed. */
+  on: string;
+  changes: Record<string, [unknown, unknown]>;
+  line: string;
+  author: string | null;
+  note: string | null;
+  meeting: { id: number; title: string; held_on: string } | null;
 }
 
 export interface Meeting {
@@ -313,7 +348,8 @@ export interface TrailItem {
 export type TrailEntry =
   | ({ type: "commit" } & TrailCommit)
   | { type: "meeting"; date: string; meeting: string; meeting_id: number; items: TrailItem[]; notes: string[] }
-  | { type: "item"; date: string; items: TrailItem[] };
+  | { type: "item"; date: string; items: TrailItem[] }
+  | { type: "register"; date: string; ref: string; kind: ItemKind; line: string; note: string | null; meeting: string | null };
 
 export interface DeliverableTrail {
   deliverable_id: string;
@@ -352,6 +388,7 @@ export interface PreRead {
   lookahead_days: number;
   actions: PreReadItem[];
   risks: PreReadItem[];
+  issues: PreReadItem[];
   decisions: PreReadItem[];
   agenda: string[];
 }

@@ -1,4 +1,4 @@
-"""Requests and rules for meetings and the register (actions, risks, decisions)."""
+"""Requests and rules for meetings and the register (actions, risks, issues, decisions)."""
 
 from __future__ import annotations
 
@@ -9,11 +9,18 @@ from pydantic import BaseModel, Field
 
 from .commands import Change
 
-ItemKind = Literal["action", "risk", "decision"]
+ItemKind = Literal["action", "risk", "issue", "decision"]
 
-PREFIX = {"action": "A", "risk": "R", "decision": "D"}
+PREFIX = {"action": "A", "risk": "R", "issue": "I", "decision": "D"}
 # The first status is the open one. Decisions are never edited, only superseded by a later one.
-STATUSES = {"action": ("open", "done"), "risk": ("open", "closed"), "decision": ("active", "superseded")}
+STATUSES = {"action": ("open", "closed"), "risk": ("open", "closed"), "issue": ("open", "closed"), "decision": ("active", "superseded")}
+# Why an item closed. A risk that happened links to the issue it became.
+OUTCOMES = {
+    "action": ("done", "dropped"),
+    "risk": ("mitigated", "passed", "accepted", "happened"),
+    "issue": ("resolved", "accepted"),
+    "decision": ("superseded",),
+}
 MAX_TEXT = 2000
 MAX_NAME = 80
 
@@ -25,11 +32,12 @@ class Attendee(BaseModel):
 
 class PersonInput(BaseModel):
     name: str
-    group: str | None = None
+    groups: list[str] = []
 
 
 class PeopleRequest(BaseModel):
     people: list[PersonInput]
+    groups: list[str] = []  # their order; groups people are in but not listed here go after
 
 
 class MeetingCreateRequest(BaseModel):
@@ -53,6 +61,10 @@ class ItemInput(BaseModel):
     deliverable_ids: list[str] = Field(default_factory=list)
 
 
+class ItemCreateRequest(ItemInput):
+    author: str | None = None  # recorded in the item's history
+
+
 class MeetingCommit(BaseModel):
     reason: str
     category: str | None = None
@@ -72,8 +84,14 @@ class ItemUpdateRequest(BaseModel):
     due_on: str | None = None
     deliverable_ids: list[str] | None = None
     status: str | None = None
+    outcome: str | None = None  # why it closed, one of OUTCOMES; given alone, it closes the item
     closed_on: str | None = None
     superseded_by: str | None = None  # a decision's ref, e.g. "D-9"
+    became: str | None = None  # the issue a risk that happened became, e.g. "I-2"; omitted, a new issue is raised
+    # Recorded in the item's history.
+    note: str | None = None
+    author: str | None = None
+    meeting_id: int | None = None
 
 
 def item_ref(kind: str, number: int) -> str:
@@ -115,3 +133,42 @@ def item_errors(item: ItemInput, deliverable_ids: set[str], index: int | None = 
         if did not in deliverable_ids:
             err("unknown_deliverable", f"deliverable {did} does not exist")
     return errors
+
+
+# --- Item history -----------------------------------------------------------------------
+# Every change to a register item is kept as an event: {field: [old, new]} for the fields
+# below. "raised" has every field from None; the others hold only what changed.
+
+HISTORY_FIELDS = ("text", "owner", "due_on", "deliverable_ids", "status", "outcome", "closed_on", "link")
+
+
+def describe_item_event(ref: str, event_type: str, changes: dict[str, Any], deliverable_name=lambda did: did) -> str:
+    """One line for an item's history, e.g. "A-7: due 2026-10-14 → 2026-10-21" or "R-2: happened, became I-1"."""
+    if event_type == "raised":
+        return f"{ref}: raised"
+    if event_type == "closed":
+        outcome = (changes.get("outcome") or [None, None])[1]
+        link = (changes.get("link") or [None, None])[1]
+        if outcome == "superseded":
+            return f"{ref}: superseded by {link}"
+        if outcome == "happened":
+            return f"{ref}: happened, became {link}"
+        return f"{ref}: closed as {outcome}" if outcome else f"{ref}: closed"
+    if event_type == "reopened":
+        return f"{ref}: reopened"
+    parts = []
+    for field, (old, new) in changes.items():
+        if field == "text":
+            parts.append(f"reworded from “{old}”")
+        elif field == "owner":
+            parts.append(f"owner {old or 'none'} → {new or 'none'}")
+        elif field == "due_on":
+            parts.append(f"due {old or 'none'} → {new or 'none'}")
+        elif field == "deliverable_ids":
+            added = [deliverable_name(d) for d in new or [] if d not in (old or [])]
+            removed = [deliverable_name(d) for d in old or [] if d not in (new or [])]
+            if added:
+                parts.append(f"linked to {', '.join(added)}")
+            if removed:
+                parts.append(f"unlinked from {', '.join(removed)}")
+    return f"{ref}: " + "; ".join(parts) if parts else f"{ref}: edited"

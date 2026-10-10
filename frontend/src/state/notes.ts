@@ -1,6 +1,7 @@
 // Meeting notes markup. Plain text, one item per line:
 //   !action @Ravi freeze the schema by Fri     -> an action owned by Ravi, due the next Friday
 //   ?risk vendor may slip @[Data Mapping]       -> a risk on a deliverable
+//   !issue test environment is down             -> an issue: something already going wrong
 //   =decision hold @[Go-Live] at 30 Oct         -> a decision
 // `@[Name]` names a deliverable. A bare `@Word` is a deliverable when it matches one with the
 // spaces removed (@DataMapping), otherwise a person or group from the project's people (see
@@ -10,8 +11,8 @@ import type { Deliverable, ItemInput, ItemKind, Person } from "../types";
 import { addDays, toDay, weekday } from "./dates";
 import { resolvePerson } from "./people";
 
-export const TAGS: Record<ItemKind, string> = { action: "!action", risk: "?risk", decision: "=decision" };
-const TAG_RE = /^(!action|\?risk|=decision)\b\s*/i;
+export const TAGS: Record<ItemKind, string> = { action: "!action", risk: "?risk", issue: "!issue", decision: "=decision" };
+export const TAG_RE = /^(!action|\?risk|!issue|=decision)\b\s*/i;
 const TOKEN_RE = /@\[([^\]\n]+)\]|@([A-Za-z][\w-]*)/g;
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];

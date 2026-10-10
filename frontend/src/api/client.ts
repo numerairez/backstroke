@@ -1,4 +1,4 @@
-import type { Attendee, Baseline, Category, Change, CommitSummary, DeliverableTrail, Diff, ItemInput, Meeting, Metrics, Person, PlanState, PreRead, Preview, Project, RegisterItem, Surprises, ValidationError } from "../types";
+import type { Attendee, Baseline, Category, Change, CommitSummary, DeliverableTrail, Diff, ItemEvent, ItemInput, Meeting, Metrics, PlanState, PreRead, Preview, Project, RegisterItem, Roster, Surprises, ValidationError } from "../types";
 
 export class ApiError extends Error {
   status: number;
@@ -62,8 +62,15 @@ export interface ItemUpdate {
   due_on?: string | null;
   deliverable_ids?: string[];
   status?: string;
+  outcome?: string;
   closed_on?: string | null;
   superseded_by?: string;
+  /** The issue a risk that happened became; left out, a new issue is raised from the risk. */
+  became?: string;
+  /** Kept in the item's history. */
+  note?: string;
+  author?: string;
+  meeting_id?: number;
 }
 
 export interface KnowledgeOptions {
@@ -99,8 +106,8 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, { message: `Couldn't build the knowledge base (HTTP ${res.status})` });
     return res.text();
   },
-  people: (id: string) => request<Person[]>(`/projects/${id}/people`),
-  savePeople: (id: string, people: Person[]) => request<Person[]>(`/projects/${id}/people`, { method: "PUT", body: JSON.stringify({ people }) }),
+  people: (id: string) => request<Roster>(`/projects/${id}/people`),
+  savePeople: (id: string, roster: Roster) => request<Roster>(`/projects/${id}/people`, { method: "PUT", body: JSON.stringify(roster) }),
   meetings: (id: string) => request<Meeting[]>(`/projects/${id}/meetings`),
   createMeeting: (id: string, input: { title: string; held_on: string; attendees?: Attendee[] }) => post<Meeting>(`/projects/${id}/meetings`, input),
   updateMeeting: (id: string, meetingId: number, input: { title?: string; held_on?: string; attendees?: Attendee[]; notes?: string }) =>
@@ -112,6 +119,7 @@ export const api = {
   preread: (id: string, meetingId: number) => request<PreRead>(`/projects/${id}/meetings/${meetingId}/preread`),
   trail: (id: string, deliverableId: string) => request<DeliverableTrail>(`/projects/${id}/deliverables/${encodeURIComponent(deliverableId)}/trail`),
   surprises: (id: string) => request<Surprises>(`/projects/${id}/surprises`),
-  createItem: (id: string, input: ItemInput) => post<RegisterItem>(`/projects/${id}/register`, input),
+  createItem: (id: string, input: ItemInput & { author?: string }) => post<RegisterItem>(`/projects/${id}/register`, input),
+  itemHistory: (id: string, itemId: number) => request<ItemEvent[]>(`/projects/${id}/register/${itemId}/history`),
   updateItem: (id: string, itemId: number, input: ItemUpdate) => patch<RegisterItem>(`/projects/${id}/register/${itemId}`, input),
 };

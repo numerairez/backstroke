@@ -18,6 +18,12 @@ describe("notes markup", () => {
     });
   });
 
+  it("reads an issue, which is not mistaken for an action", () => {
+    const line = parseLine("!issue test environment is down @[UAT] by Fri", 0, DELIVERABLES, MEETING);
+    expect(line).toMatchObject({ kind: "issue", deliverable_ids: ["uat"], due_on: null, text: "Test environment is down UAT by Fri" });
+    expect(setLineTag("!issue env down", 0, "risk")).toBe("?risk env down");
+  });
+
   it("treats lines without a tag as plain notes", () => {
     const line = parseLine("Ravi: vendor pushed schema v3 on Monday", 0, DELIVERABLES, MEETING);
     expect(line.kind).toBeNull();

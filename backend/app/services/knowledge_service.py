@@ -190,8 +190,9 @@ def build_markdown(
     add("- Deliverables sit in workstreams. A milestone has one date. Some deliverables are split into phases that run in order.")
     add("- Every change to the plan is a numbered commit with a reason. Commit #1 is the original plan. Commits are never edited.")
     add(f"- Status is as of {today}. \"Behind\" means a phase has passed its end date while the deliverable's own end is still ahead.")
-    add("- Register IDs: A = action, R = risk, D = decision. A decision is never edited; a later decision supersedes it.")
-    add("- An action or risk with no deliverable is programme-level.")
+    add("- Register IDs: A = action, R = risk, I = issue, D = decision. A decision is never edited; a later decision supersedes it.")
+    add("- Closed items stay in the register with why they closed. A risk that happened names the issue it became.")
+    add("- An item with no deliverable is programme-level.")
     add("- This file is the record. If it doesn't answer a question, say so rather than guessing.")
     add("")
 
@@ -213,8 +214,12 @@ def build_markdown(
     if upcoming:
         add("- Next milestones: " + ", ".join(f"{m['name']} {m['start_date']}" for m in upcoming[:4]) + ".")
     open_risks = sum(1 for i in register if i["kind"] == "risk" and i["open"])
+    open_issues = sum(1 for i in register if i["kind"] == "issue" and i["open"])
     active = sum(1 for i in register if i["kind"] == "decision" and i["open"])
-    add(f"- Register: {plural(len(open_actions), 'open action')} ({len(overdue)} overdue), {plural(open_risks, 'open risk')}, {plural(active, 'active decision')}.")
+    add(
+        f"- Register: {plural(len(open_actions), 'open action')} ({len(overdue)} overdue), {plural(open_risks, 'open risk')}, "
+        f"{plural(open_issues, 'open issue')}, {plural(active, 'active decision')}."
+    )
     if meetings:
         add(f"- {plural(len(meetings), 'meeting')} recorded; the latest is {meetings[0]['title']} on {meetings[0]['held_on']}.")
     add("")
@@ -282,14 +287,15 @@ def build_markdown(
                 add(f"- {line}")
         add("")
 
-    if people:
+    if people["people"] or people["groups"]:
         add("## People")
         add("")
-        teams: dict[str, list[str]] = {}
-        for person in people:
-            teams.setdefault(person["group"] or "", []).append(person["name"])
+        teams: dict[str, list[str]] = {g: [] for g in people["groups"]}
+        for person in people["people"]:
+            for team in person["groups"] or [""]:
+                teams.setdefault(team, []).append(person["name"])
         for team, names in sorted(teams.items(), key=lambda t: (t[0] == "", t[0].lower())):
-            add(f"- {team or 'No group'}: {', '.join(names)}")
+            add(f"- {team or 'No group'}: {', '.join(names) or '(no one yet)'}")
         add("")
 
     add("## Meetings")
@@ -319,7 +325,7 @@ def build_markdown(
         add("")
 
     add("## Register")
-    for kind, title in [("action", "Actions"), ("risk", "Risks"), ("decision", "Decisions")]:
+    for kind, title in [("action", "Actions"), ("risk", "Risks"), ("issue", "Issues"), ("decision", "Decisions")]:
         items = [i for i in register if i["kind"] == kind and (include_closed or i["open"])]
         items.sort(key=lambda i: (not i["open"], i["id"]))
         add("")
@@ -336,11 +342,13 @@ def build_markdown(
             if i["status"] == "superseded":
                 status = f"superseded by {i['superseded_by']}"
             elif not i["open"]:
-                status = f"{i['status']} {i['closed_on'] or ''}".strip()
+                status = f"{i['outcome'] or 'closed'} {i['closed_on'] or ''}".strip() + (f", became {i['became']}" if i["became"] else "")
             elif due_col and i["due_on"] and i["due_on"] < today:
                 status = "open, overdue"
             else:
                 status = STATUSES[kind][0]
+            if i["raised_from"]:
+                status += f", from {', '.join(i['raised_from'])}"
             add(
                 f"| {i['ref']} | {cell(i['text'])} | {cell(i['owner'] or '')} | "
                 f"{cell(', '.join(dname(x) for x in i['deliverable_ids']) or 'programme')} | {cell(where)} |"
@@ -348,4 +356,16 @@ def build_markdown(
                 + f" {status} |"
             )
     add("")
+
+    changes = sorted((e for e in meeting_service.register_history(session, project_id) if e["type"] != "raised"), key=lambda e: e["on"])
+    if include_history and changes:
+        add("### Register changes")
+        add("")
+        add("Oldest first: edits, closures and reopenings. When each item was raised is in its table above.")
+        add("")
+        for e in changes:
+            where = f" · at {e['meeting']['title']} {e['meeting']['held_on']}" if e["meeting"] else ""
+            who = f" · {e['author']}" if e["author"] else ""
+            add(f"- {e['on']} · {e['line']}{where}{who}" + (f". Why: {e['note']}" if e["note"] else ""))
+        add("")
     return "\n".join(out)

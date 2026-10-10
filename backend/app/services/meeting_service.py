@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 
 from ..domain.commands import DomainError
 from ..domain.meetings import (
+    HISTORY_FIELDS,
     MAX_NAME,
+    MAX_TEXT,
+    OUTCOMES,
     PREFIX,
     STATUSES,
     Attendee,
@@ -18,12 +21,13 @@ from ..domain.meetings import (
     ItemInput,
     ItemUpdateRequest,
     MeetingUpdateRequest,
+    describe_item_event,
     is_date,
     item_errors,
     item_ref,
     meeting_reference,
 )
-from ..domain.models import Commit, Meeting, RegisterItem
+from ..domain.models import Commit, Meeting, RegisterEvent, RegisterItem
 from . import commit_service, projection_service, version_service
 from .commit_service import NotFound, require_project, utc_now
 
@@ -147,6 +151,8 @@ def delete_meeting(session: Session, project_id: str, meeting_id: int) -> None:
     meeting = require_meeting(session, project_id, meeting_id)
     if meeting.finished_at:
         raise fail("meeting_finished", "A finished meeting can't be deleted; its items are in the register")
+    if session.scalar(select(RegisterEvent.id).where(RegisterEvent.meeting_id == meeting.id).limit(1)):
+        raise fail("meeting_in_history", "Register items were updated in this meeting, and their history names it")
     session.delete(meeting)
     session.flush()
 
@@ -186,7 +192,7 @@ def finish_meeting(
     if errors:
         raise DomainError(errors)
 
-    items = [_add_item(session, project_id, item, meeting.id, finished_at) for item in body.items]
+    items = [_add_item(session, project_id, item, meeting.id, finished_at, author=body.author.strip()) for item in body.items]
     meeting.finished_at = finished_at or utc_now()
     meeting.plan_version = version_service.current_version(session, project_id)
     meeting.updated_at = meeting.finished_at
@@ -197,10 +203,20 @@ def finish_meeting(
 # --- Register ---------------------------------------------------------------------------
 
 
+def _ref(item: RegisterItem | None) -> str | None:
+    return item_ref(item.kind, item.number) if item else None
+
+
 def item_to_dict(session: Session, item: RegisterItem, meeting: Meeting | None = None) -> dict[str, Any]:
     if meeting is None and item.meeting_id:
         meeting = session.get(Meeting, item.meeting_id)
-    superseded_by = session.get(RegisterItem, item.superseded_by_id) if item.superseded_by_id else None
+    following = session.get(RegisterItem, item.superseded_by_id) if item.superseded_by_id else None
+    # An issue lists the risks that became it.
+    sources = (
+        session.scalars(select(RegisterItem).where(RegisterItem.superseded_by_id == item.id, RegisterItem.kind == "risk").order_by(RegisterItem.number)).all()
+        if item.kind == "issue"
+        else []
+    )
     return {
         "id": item.id,
         "ref": item_ref(item.kind, item.number),
@@ -212,8 +228,11 @@ def item_to_dict(session: Session, item: RegisterItem, meeting: Meeting | None =
         "meeting": {"id": meeting.id, "title": meeting.title, "held_on": meeting.held_on} if meeting else None,
         "status": item.status,
         "open": item.status == STATUSES[item.kind][0],
+        "outcome": item.outcome,
         "closed_on": item.closed_on,
-        "superseded_by": item_ref(superseded_by.kind, superseded_by.number) if superseded_by else None,
+        "superseded_by": _ref(following) if item.kind == "decision" else None,
+        "became": _ref(following) if item.kind == "risk" else None,
+        "raised_from": [_ref(r) for r in sources],
         "created_at": item.created_at,
     }
 
@@ -225,7 +244,109 @@ def list_items(session: Session, project_id: str) -> list[dict[str, Any]]:
     return [item_to_dict(session, i, meetings.get(i.meeting_id)) for i in items]
 
 
-def _add_item(session: Session, project_id: str, item: ItemInput, meeting_id: int | None, created_at: str | None) -> RegisterItem:
+# --- Item history -------------------------------------------------------------------------
+
+
+def _snapshot(session: Session, item: RegisterItem) -> dict[str, Any]:
+    following = session.get(RegisterItem, item.superseded_by_id) if item.superseded_by_id else None
+    return {
+        "text": item.text,
+        "owner": item.owner,
+        "due_on": item.due_on,
+        "deliverable_ids": list(item.deliverable_ids or []),
+        "status": item.status,
+        "outcome": item.outcome,
+        "closed_on": item.closed_on,
+        "link": _ref(following),
+    }
+
+
+def _record(
+    session: Session,
+    item: RegisterItem,
+    before: dict[str, Any] | None,
+    *,
+    meeting_id: int | None = None,
+    author: str | None = None,
+    note: str | None = None,
+    at: str | None = None,
+) -> RegisterEvent | None:
+    """Keep what changed on `item` since `before` (None: it was just raised). Nothing changed, nothing kept."""
+    after = _snapshot(session, item)
+    if before is None:
+        changes = {f: [None, after[f]] for f in HISTORY_FIELDS if after[f] not in (None, [])}
+        kind = "raised"
+    else:
+        changes = {f: [before[f], after[f]] for f in HISTORY_FIELDS if before[f] != after[f]}
+        if not changes:
+            return None
+        kind = ("reopened" if after["status"] == STATUSES[item.kind][0] else "closed") if "status" in changes else "edited"
+    event = RegisterEvent(
+        project_id=item.project_id,
+        item_id=item.id,
+        type=kind,
+        changes=changes,
+        meeting_id=meeting_id,
+        author=(author or "").strip() or None,
+        note=(note or "").strip() or None,
+        created_at=at or utc_now(),
+    )
+    session.add(event)
+    session.flush()
+    return event
+
+
+def event_to_dict(event: RegisterEvent, ref: str, meetings: dict[int, Meeting], deliverable_name=lambda did: did) -> dict[str, Any]:
+    meeting = meetings.get(event.meeting_id) if event.meeting_id else None
+    closed_on = (event.changes.get("closed_on") or [None, None])[1] if event.type == "closed" else None
+    return {
+        "id": event.id,
+        "type": event.type,
+        "at": event.created_at,
+        # The day it happened: a closure can be recorded after the day it closed.
+        "on": closed_on or (meeting.held_on if meeting else event.created_at[:10]),
+        "changes": event.changes,
+        "line": describe_item_event(ref, event.type, event.changes, deliverable_name),
+        "author": event.author,
+        "note": event.note,
+        "meeting": {"id": meeting.id, "title": meeting.title, "held_on": meeting.held_on} if meeting else None,
+    }
+
+
+def item_history(session: Session, project_id: str, item_id: int) -> list[dict[str, Any]]:
+    """Everything that happened to one item, oldest first."""
+    item = _require_item(session, project_id, item_id)
+    events = session.scalars(select(RegisterEvent).where(RegisterEvent.item_id == item.id).order_by(RegisterEvent.id)).all()
+    meetings = {m.id: m for m in session.scalars(select(Meeting).where(Meeting.project_id == project_id))}
+    plan = projection_service.load_state(session, project_id)["deliverables"]
+    name = lambda did: plan[did]["name"] if did in plan else "a removed deliverable"  # noqa: E731
+    return [event_to_dict(e, item_ref(item.kind, item.number), meetings, name) for e in events]
+
+
+def register_history(session: Session, project_id: str) -> list[dict[str, Any]]:
+    """Every item event in the project, oldest first, each with its item's ref, kind and deliverables."""
+    items = {i.id: i for i in session.scalars(select(RegisterItem).where(RegisterItem.project_id == project_id))}
+    events = session.scalars(select(RegisterEvent).where(RegisterEvent.project_id == project_id).order_by(RegisterEvent.id)).all()
+    meetings = {m.id: m for m in session.scalars(select(Meeting).where(Meeting.project_id == project_id))}
+    plan = projection_service.load_state(session, project_id)["deliverables"]
+    name = lambda did: plan[did]["name"] if did in plan else "a removed deliverable"  # noqa: E731
+    out = []
+    for e in events:
+        item = items[e.item_id]
+        ref = item_ref(item.kind, item.number)
+        out.append({**event_to_dict(e, ref, meetings, name), "item_id": item.id, "ref": ref, "kind": item.kind, "deliverable_ids": item.deliverable_ids or []})
+    return out
+
+
+def _add_item(
+    session: Session,
+    project_id: str,
+    item: ItemInput,
+    meeting_id: int | None,
+    created_at: str | None,
+    author: str | None = None,
+    note: str | None = None,
+) -> RegisterItem:
     number = (
         session.scalar(
             select(func.max(RegisterItem.number)).where(RegisterItem.project_id == project_id, RegisterItem.kind == item.kind)
@@ -248,17 +369,18 @@ def _add_item(session: Session, project_id: str, item: ItemInput, meeting_id: in
     )
     session.add(row)
     session.flush()
+    _record(session, row, None, meeting_id=meeting_id, author=author, note=note, at=now)
     return row
 
 
-def create_item(session: Session, project_id: str, item: ItemInput, created_at: str | None = None) -> RegisterItem:
+def create_item(session: Session, project_id: str, item: ItemInput, created_at: str | None = None, author: str | None = None) -> RegisterItem:
     """An item raised outside a meeting, e.g. a programme-level action."""
     require_project(session, project_id)
     existing = set(projection_service.load_state(session, project_id)["deliverables"])
     errors = item_errors(item, existing)
     if errors:
         raise DomainError(errors)
-    return _add_item(session, project_id, item, None, created_at)
+    return _add_item(session, project_id, item, None, created_at, author=author)
 
 
 def _require_item(session: Session, project_id: str, item_id: int) -> RegisterItem:
@@ -278,12 +400,41 @@ def _find_by_ref(session: Session, project_id: str, ref: str) -> RegisterItem | 
     )
 
 
+def _link(session: Session, project_id: str, item: RegisterItem, outcome: str, body: ItemUpdateRequest, at: str) -> RegisterItem | None:
+    """The item that follows one closing as `outcome`: the newer decision, or the issue a risk became."""
+    ref = item_ref(item.kind, item.number)
+    if outcome == "superseded":
+        replacement = _find_by_ref(session, project_id, body.superseded_by or "")
+        if replacement is None or replacement.kind != "decision" or replacement.id == item.id:
+            raise fail("superseded_by_required", "Name the decision that supersedes this one, e.g. D-9")
+        if replacement.status != "active":
+            raise fail("superseded_by_inactive", f"{_ref(replacement)} is itself superseded")
+        return replacement
+    if outcome == "happened":
+        if body.became:
+            issue = _find_by_ref(session, project_id, body.became)
+            if issue is None or issue.kind != "issue":
+                raise fail("became_not_an_issue", f"A risk that happened becomes an issue; {body.became!r} isn't one, e.g. I-2")
+            return issue
+        # No issue named: raise one that carries the risk over.
+        issue = ItemInput(kind="issue", text=item.text, owner=item.owner, deliverable_ids=item.deliverable_ids or [])
+        return _add_item(session, project_id, issue, body.meeting_id, at, author=body.author, note=f"Raised when {ref} happened")
+    return None
+
+
 def update_item(session: Session, project_id: str, item_id: int, body: ItemUpdateRequest, today: str | None = None) -> RegisterItem:
     item = _require_item(session, project_id, item_id)
+    ref = item_ref(item.kind, item.number)
+    before = _snapshot(session, item)
+    now = utc_now()
+    if body.meeting_id is not None:
+        require_meeting(session, project_id, body.meeting_id)
+    if body.note is not None and len(body.note) > MAX_TEXT:
+        raise fail("note_too_long", f"The note is longer than {MAX_TEXT} characters")
     edits = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in ("text", "owner", "due_on", "deliverable_ids")}
 
     if item.kind == "decision" and edits:
-        raise fail("decision_locked", f"{item_ref(item.kind, item.number)} is a decision; record a new decision that supersedes it instead")
+        raise fail("decision_locked", f"{ref} is a decision; record a new decision that supersedes it instead")
     if edits:
         merged = ItemInput(
             kind=item.kind,
@@ -302,24 +453,29 @@ def update_item(session: Session, project_id: str, item_id: int, body: ItemUpdat
         item.due_on = merged.due_on or None
         item.deliverable_ids = list(dict.fromkeys(merged.deliverable_ids))
 
-    if body.status is not None and body.status != item.status:
-        open_status, closed_status = STATUSES[item.kind]
-        if body.status not in (open_status, closed_status):
-            raise fail("invalid_status", f"A {item.kind} is {open_status} or {closed_status}, not {body.status!r}")
+    open_status, closed_status = STATUSES[item.kind]
+    status = body.status if body.status is not None else (closed_status if body.outcome else None)
+    if status is not None and status != item.status:
+        if status not in (open_status, closed_status):
+            raise fail("invalid_status", f"A {item.kind} is {open_status} or {closed_status}, not {status!r}")
         if body.closed_on is not None and not is_date(body.closed_on):
             raise fail("invalid_date", f"{body.closed_on!r} is not a YYYY-MM-DD date")
-        if item.kind == "decision":
-            if body.status == "active":
+        if status == open_status:
+            if item.kind == "decision":
                 raise fail("decision_locked", "A superseded decision stays superseded; record a new decision instead")
-            replacement = _find_by_ref(session, project_id, body.superseded_by or "")
-            if replacement is None or replacement.kind != "decision" or replacement.id == item.id:
-                raise fail("superseded_by_required", "Name the decision that supersedes this one, e.g. D-9")
-            if replacement.status != "active":
-                raise fail("superseded_by_inactive", f"{item_ref('decision', replacement.number)} is itself superseded")
-            item.superseded_by_id = replacement.id
-        item.status = body.status
-        item.closed_on = None if body.status == open_status else (body.closed_on or today or date.today().isoformat())
+            item.outcome, item.superseded_by_id, item.closed_on = None, None, None
+        else:
+            outcome = body.outcome or ("superseded" if item.kind == "decision" else None)
+            if outcome not in OUTCOMES[item.kind]:
+                choices = ", ".join(OUTCOMES[item.kind])
+                raise fail("outcome_required", f"Say why {ref} is closing: {choices}")
+            following = _link(session, project_id, item, outcome, body, now)
+            item.outcome = outcome
+            item.superseded_by_id = following.id if following else None
+            item.closed_on = body.closed_on or today or date.today().isoformat()
+        item.status = status
 
-    item.updated_at = utc_now()
+    item.updated_at = now
     session.flush()
+    _record(session, item, before, meeting_id=body.meeting_id, author=body.author, note=body.note, at=now)
     return item

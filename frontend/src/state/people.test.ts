@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Deliverable, Person } from "../types";
 import { parseLine } from "./notes";
-import { handle, knownNames, mentionAt, resolvePerson, suggestPeople } from "./people";
+import { groupsOf, handle, knownNames, membersOf, mentionAt, resolvePerson, suggestPeople } from "./people";
 
 const PEOPLE: Person[] = [
-  { name: "Ravi Kumar", group: "Data" },
-  { name: "Ravi Shah", group: "Data" },
-  { name: "Priya", group: "PMO" },
-  { name: "Jo O'Neil", group: "AI agent" },
+  { name: "Ravi Kumar", groups: ["Data"] },
+  { name: "Ravi Shah", groups: ["Data", "Steering"] },
+  { name: "Priya", groups: ["PMO", "Steering"] },
+  { name: "Jo O'Neil", groups: ["AI agent"] },
 ];
 const UAT: Deliverable = { id: "uat", name: "UAT", workstream_id: "w", type: "task", start_date: "2026-10-01", end_date: "2026-10-09" };
 
@@ -39,6 +39,12 @@ describe("people", () => {
     expect(suggestPeople("a", PEOPLE).map((s) => s.label)).toEqual(["AI agent"]);
     expect(suggestPeople("da", PEOPLE)).toEqual([{ label: "Data", handle: "Data", detail: "group · 2" }]);
     expect(suggestPeople("", PEOPLE, 3)).toHaveLength(3);
+  });
+
+  it("puts someone in every group they belong to", () => {
+    expect(groupsOf(PEOPLE)).toEqual(["Data", "Steering", "PMO", "AI agent"]);
+    expect(membersOf(PEOPLE, "Steering")).toEqual(["Ravi Shah", "Priya"]);
+    expect(suggestPeople("pri", PEOPLE)).toEqual([{ label: "Priya", handle: "Priya", detail: "PMO, Steering" }]);
   });
 
   it("finds the @word being typed", () => {

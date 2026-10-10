@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api/client";
 import { CommitDialog } from "./components/CommitDialog";
 import { FinishMeetingDialog } from "./components/FinishMeetingDialog";
-import { InspectorPanel } from "./components/InspectorPanel";
+import { ContextMenu, QuickPrompt, type MenuEntry, type MenuRequest, type PromptRequest } from "./components/ContextMenu";
+import { DetailsCard, type DetailsTab } from "./components/DetailsCard";
 import { KnowledgeDialog } from "./components/KnowledgeDialog";
-import { MeetingsPanel } from "./components/MeetingsPanel";
-import { PeoplePanel } from "./components/PeoplePanel";
-import { RegisterPanel, isOverdue } from "./components/RegisterPanel";
-import { DeliverableHistory, SurpriseIndex } from "./components/Trail";
+import { MeetingsView } from "./components/MeetingsView";
+import { PeopleView } from "./components/PeopleView";
+import { RegisterView, isOverdue } from "./components/RegisterView";
+import { TabIcon } from "./components/TabIcon";
+import { SurpriseIndex } from "./components/Trail";
 import { StagedChangesDrawer } from "./components/StagedChangesDrawer";
 import { ComparePanel, type CompareRange } from "./history/ComparePanel";
 import { describeEvents } from "./history/describe";
@@ -21,10 +23,15 @@ import { useMeetings } from "./state/useMeetings";
 import { useProject } from "./state/useProject";
 import { PHASE_COLORS, phaseNameOrder } from "./state/phases";
 import { deliverableStatus, type StatusKind } from "./state/status";
+import { deliverableMenu, emptyMenu, laneMenu, type LinkRole, type MenuContext } from "./timeline/menus";
 import { TimelineCanvas, type ColorBy } from "./timeline/TimelineCanvas";
 import type { Category, Meeting, PlanState, Project } from "./types";
 
-type Tab = "inspect" | "changes" | "history" | "compare" | "metrics" | "meetings" | "register" | "people";
+type View = "plan" | "register" | "people";
+type Tab = "changes" | "meetings" | "history" | "insights";
+const VIEWS: View[] = ["plan", "register", "people"];
+/** Opening a meeting widens the panel to at least this, so the notes have room. */
+const MEETING_PANEL_MIN = 640;
 const ZOOMS = [6, 10, 16, 26, 40];
 const SIDEBAR_DEFAULT = 380;
 const SIDEBAR_MIN = 300;
@@ -63,7 +70,19 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebar(Number(stored("backstroke:sidebar", String(SIDEBAR_DEFAULT))) || SIDEBAR_DEFAULT));
   const [colorBy, setColorBy] = useState<ColorBy>(() => (stored("backstroke:colorBy", "lane") === "phase" ? "phase" : "lane"));
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [tab, setTab] = useState<Tab>("inspect");
+  const [view, setView] = useState<View>(() => {
+    const v = stored("backstroke:view", "plan") as View;
+    return VIEWS.includes(v) ? v : "plan";
+  });
+  const [tab, setTab] = useState<Tab>("changes");
+  const [historyMode, setHistoryMode] = useState<"commits" | "compare">("commits");
+  const [sidebarOpen, setSidebarOpen] = useState(() => stored("backstroke:sidebarOpen", "1") === "1");
+  const [menu, setMenu] = useState<MenuRequest | null>(null);
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
+  const [details, setDetails] = useState<{ id: string; tab: DetailsTab; focusName: boolean } | null>(null);
+  const [linking, setLinking] = useState<{ id: string; role: LinkRole } | null>(null);
+  const [tipSeen, setTipSeen] = useState(() => stored("backstroke:tipSeen", "") === "1");
+  const menuAt = useRef({ x: 200, y: 200 });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewVersion, setViewVersion] = useState<number | null>(null);
   const [compare, setCompare] = useState<CompareRange | null>(null);
@@ -100,7 +119,17 @@ export default function App() {
     setPlaying(false);
     setExpanded(new Set());
     setOpenMeetingId(null);
+    setDetails(null);
+    setLinking(null);
   }, [projectId]);
+  useEffect(() => store("backstroke:view", view), [view]);
+  // Floating details and link mode belong to the layout they were opened in.
+  useEffect(() => {
+    setDetails(null);
+    setLinking(null);
+    setMenu(null);
+  }, [view]);
+  useEffect(() => store("backstroke:sidebarOpen", sidebarOpen ? "1" : "0"), [sidebarOpen]);
   useEffect(() => store("backstroke:author", author), [author]);
   useEffect(() => store("backstroke:zoom", String(zoom)), [zoom]);
   useEffect(() => store("backstroke:sidebar", String(sidebarWidth)), [sidebarWidth]);
@@ -144,6 +173,22 @@ export default function App() {
     window.setTimeout(() => setToast((t) => (t === msg ? null : t)), 3500);
   }, []);
 
+  /** Show the plan with a side panel tab open. */
+  const showTab = useCallback((t: Tab) => {
+    setView("plan");
+    setTab(t);
+    setSidebarOpen(true);
+  }, []);
+  const showCompare = useCallback(
+    (range: CompareRange) => {
+      setCompare(range);
+      setViewVersion(null);
+      setHistoryMode("compare");
+      showTab("history");
+    },
+    [showTab],
+  );
+
   // --- Which versions are on screen -------------------------------------------------
   const shownVersion = compare ? compare.to : viewVersion;
   const ghostVersion = compare ? compare.from : !live && showChanges && viewVersion! > 0 ? viewVersion! - 1 : null;
@@ -185,7 +230,7 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [playing, p.version]);
 
-  const view = useCallback(
+  const showVersion = useCallback(
     (seq: number | null) => {
       setCompare(null);
       setViewVersion(seq);
@@ -200,31 +245,55 @@ export default function App() {
   };
 
   // --- Keyboard ---------------------------------------------------------------------
+  const meetingsShown = view === "plan" && sidebarOpen && tab === "meetings";
+  const takingNotes = meetingsShown && openMeetingId !== null;
+  const timelineShown = view === "plan";
+  const barRect = (id: string) => document.querySelector(`[data-item-id="${CSS.escape(id)}"]`)?.getBoundingClientRect() ?? null;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (commitOpen || isTyping(e)) return;
+      if (commitOpen || finishing || menu || prompt || !timelineShown || isTyping(e)) return;
+      if ((e.target as HTMLElement).closest?.(".details-card")) return;
       if (e.key === "Escape") {
-        if (selectedId && stagedIds.has(selectedId)) p.revert("deliverable", selectedId);
+        if (linking) setLinking(null);
+        else if (details) setDetails(null);
+        else if (selectedId && stagedIds.has(selectedId)) p.revert("deliverable", selectedId);
         else setSelectedId(null);
-      } else if (e.key === "ArrowLeft" && p.version > 0) {
+      } else if (e.key === "ArrowLeft" && p.version > 0 && view === "plan") {
         e.preventDefault();
         setPlaying(false);
-        view(Math.max(0, (viewVersion ?? p.version) - 1));
-      } else if (e.key === "ArrowRight" && viewVersion !== null) {
+        showVersion(Math.max(0, (viewVersion ?? p.version) - 1));
+      } else if (e.key === "ArrowRight" && viewVersion !== null && view === "plan") {
         e.preventDefault();
         setPlaying(false);
-        view(viewVersion + 1 >= p.version ? null : viewVersion + 1);
+        showVersion(viewVersion + 1 >= p.version ? null : viewVersion + 1);
       } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId && editable) {
         p.stage({ entity_type: "deliverable", entity_id: selectedId, operation: "delete", fields: {} });
         setSelectedId(null);
+        setDetails(null);
+      } else if (e.key === "Enter" && selectedId) {
+        e.preventDefault();
+        openDetails(selectedId);
+      } else if (e.key === "F2" && selectedId && editable) {
+        e.preventDefault();
+        const d = displayed.deliverables.find((x) => x.id === selectedId);
+        const r = barRect(selectedId);
+        if (d && r) {
+          menuAt.current = { x: r.left, y: r.bottom + 6 };
+          openPrompt({ label: "Name", value: d.name, onSubmit: (name) => p.stage({ entity_type: "deliverable", entity_id: d.id, operation: "update", fields: { name } }) });
+        }
+      } else if ((e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) && selectedId) {
+        e.preventDefault();
+        const r = barRect(selectedId);
+        if (r) openItemMenu(selectedId, null, r.left, r.bottom + 4);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [commitOpen, selectedId, stagedIds, viewVersion, p, editable, view]);
+  });
 
   // --- Actions ----------------------------------------------------------------------
-  const addDeliverable = (workstreamId: string, date?: string) => {
+  const addDeliverable = (workstreamId: string, date?: string, type: "task" | "milestone" = "task") => {
     if (!editable) return;
     const start = date ?? today;
     const id = newId("deliverable");
@@ -232,10 +301,11 @@ export default function App() {
       entity_type: "deliverable",
       entity_id: id,
       operation: "create",
-      fields: { workstream_id: workstreamId, name: "New deliverable", type: "task", start_date: start, end_date: addDays(start, 4) },
+      fields: { workstream_id: workstreamId, name: type === "milestone" ? "New milestone" : "New deliverable", type, start_date: start, end_date: type === "milestone" ? start : addDays(start, 4) },
     });
     setSelectedId(id);
-    setTab("inspect");
+    // Open the card once the new bar is drawn, so it sits beside it.
+    requestAnimationFrame(() => setDetails({ id, tab: "details", focusName: true }));
   };
 
   const applySuggestions = () => {
@@ -256,7 +326,7 @@ export default function App() {
     if (reason === null) return;
     try {
       const commit = await p.revertCommit(seq, who, reason.trim() || undefined);
-      view(null);
+      showVersion(null);
       flash(`Undo recorded as #${commit.seq}`);
     } catch (e) {
       const err = e as ApiError;
@@ -283,20 +353,45 @@ export default function App() {
     setProjectId(created.id);
   };
 
-  // With a meeting open, the sidebar stays on its notes: selecting a bar doesn't switch to the inspector.
-  const takingNotes = tab === "meetings" && openMeetingId !== null;
+  // An open details card follows the selection, and closes when nothing is selected.
   const select = (id: string | null) => {
     setSelectedId(id);
-    if (id && !takingNotes) setTab("inspect");
+    setDetails((cur) => (cur && id ? (cur.id === id ? cur : { ...cur, id, focusName: false }) : null));
+  };
+  const openDetails = (id: string, t: DetailsTab = "details") => {
+    setSelectedId(id);
+    setDetails({ id, tab: t, focusName: false });
+  };
+  /** Select a deliverable from elsewhere (register, notes, metrics) and show it on the plan. */
+  const focusDeliverable = (id: string) => {
+    if (!timelineShown) setView("plan");
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-item-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+      window.setTimeout(() => openDetails(id), 250);
+    });
+    setSelectedId(id);
+  };
+
+  const link = (from: string, role: LinkRole, to: string) => {
+    const [predecessor_id, successor_id] = role === "predecessor" ? [to, from] : [from, to];
+    const exists = displayed.dependencies.some(
+      (d) => (d.predecessor_id === predecessor_id && d.successor_id === successor_id) || (d.predecessor_id === successor_id && d.successor_id === predecessor_id),
+    );
+    setLinking(null);
+    if (exists) return flash("Those two are already linked");
+    p.stage({ entity_type: "dependency", entity_id: newId("dependency"), operation: "create", fields: { predecessor_id, successor_id, type: "FS" } });
+    const name = (x: string) => displayed.deliverables.find((d) => d.id === x)?.name ?? "?";
+    flash(`Staged: ${name(successor_id)} depends on ${name(predecessor_id)}`);
   };
   const pick = (id: string) => {
+    if (linking) return link(linking.id, linking.role, id);
     const d = displayed.deliverables.find((x) => x.id === id);
     if (takingNotes && d) setMentionRequest({ name: d.name, nonce: Date.now() });
   };
 
   const viewCommit = (seq: number) => {
     setPlaying(false);
-    view(seq === p.version ? null : seq);
+    showVersion(seq === p.version ? null : seq);
     p.stateAt(seq);
     if (seq > 0) p.stateAt(seq - 1);
   };
@@ -335,30 +430,197 @@ export default function App() {
     }
   };
 
+  // --- Right-click menus ----------------------------------------------------------
+  const openPrompt = (req: Omit<PromptRequest, "x" | "y">) => setPrompt({ ...req, ...menuAt.current });
+  const menuContext: MenuContext = {
+    state: displayed,
+    persisted: p.persisted,
+    editable,
+    asOf,
+    stage: p.stage,
+    progress: (id, phase, finishedOn) => void recordProgress(id, phase, finishedOn),
+    prompt: openPrompt,
+    openDetails,
+    startLink: (id, role) => {
+      setLinking({ id, role });
+      setDetails(null);
+    },
+    select,
+    addDeliverable,
+  };
+  const showMenu = (items: MenuEntry[], x: number, y: number, heading?: string) => {
+    if (!items.length) return;
+    menuAt.current = { x, y };
+    setPrompt(null);
+    setMenu({ x, y, items, heading });
+  };
+  const openItemMenu = (id: string, phase: number | null, x: number, y: number) => {
+    const d = displayed.deliverables.find((x) => x.id === id);
+    const phaseName = phase !== null && d?.phases ? d.phases[phase]?.name : null;
+    showMenu(deliverableMenu(menuContext, id, phase), x, y, d ? `${d.name}${phaseName ? ` · ${phaseName}` : ""}` : undefined);
+  };
+
   const baseline = p.project?.baselines[0];
   const staged = p.staged.length;
   const overdueActions = meetings.register.filter((i) => isOverdue(i, today)).length;
   // Trail, pre-read and surprise index reload when the plan, the register or a finished meeting changes.
   const recordsKey = `${p.version}|${meetings.register.map((i) => `${i.id}:${i.status}`).join(",")}|${meetings.meetings.filter((m) => m.finished_at).length}`;
-  const openMeeting = (id: number) => {
-    setTab("meetings");
+  const openMeetingNotes = (id: number | null) => {
     setOpenMeetingId(id);
+    setLinking(null);
+    if (id !== null) setSidebarWidth((w) => Math.max(w, clampSidebar(MEETING_PANEL_MIN)));
   };
+  const openMeeting = (id: number) => {
+    showTab("meetings");
+    openMeetingNotes(id);
+  };
+  const liveMeeting = openMeetingId !== null ? meetings.meetings.find((m) => m.id === openMeetingId && !m.finished_at) : undefined;
+  const unlistedPeople = [
+    ...new Set([...meetings.meetings.flatMap((m) => m.attendees.map((a) => a.name)), ...meetings.register.flatMap((i) => (i.owner ? [i.owner] : []))]),
+  ].filter(
+    (n) => !meetings.people.some((x) => x.name.toLowerCase() === n.toLowerCase()) && !meetings.groups.some((g) => g.toLowerCase() === n.toLowerCase()),
+  );
 
   if (bootError) return <div className="boot-error">{bootError}</div>;
+
+  const timeline = (
+    <section className="timeline-wrap">
+      {!showingLive && (
+        <div className="history-banner">
+          {compare ? (
+            <>
+              Comparing <b>#{compare.from}</b> → <b>#{compare.to}</b> · read-only
+            </>
+          ) : (
+            <>
+              Viewing <b>#{viewVersion}</b> of {p.version} · read-only
+            </>
+          )}
+          {!compare && (
+            <label className="toggle">
+              <input type="checkbox" checked={showChanges} onChange={(e) => setShowChanges(e.target.checked)} /> show what changed
+            </label>
+          )}
+          <button className="small" onClick={() => showVersion(null)}>
+            Return to current
+          </button>
+        </div>
+      )}
+      {showingLive && compare && (
+        <div className="history-banner compare">
+          Ghost bars show <b>#{compare.from}</b>
+          <button className="small" onClick={() => setCompare(null)}>
+            Hide
+          </button>
+        </div>
+      )}
+      {linking && (
+        <div className="history-banner linking">
+          Click the deliverable that <b>{displayed.deliverables.find((d) => d.id === linking.id)?.name}</b> {linking.role === "predecessor" ? "depends on" : "blocks"}
+          <button className="small" onClick={() => setLinking(null)}>
+            Cancel (Esc)
+          </button>
+        </div>
+      )}
+      <TimelineCanvas
+        state={displayed}
+        ghost={ghost}
+        order={order}
+        dayWidth={ZOOMS[zoom] ?? 16}
+        today={today}
+        editable={editable}
+        animate={!showingLive || playing}
+        stagedIds={stagedIds}
+        conflicts={conflicts}
+        selectedId={selectedId}
+        focusKey={projectId ?? ""}
+        asOf={asOf}
+        expanded={expanded}
+        colorBy={colorBy}
+        linkingFrom={linking?.id ?? null}
+        onToggleExpand={toggleExpand}
+        onSelect={select}
+        onPick={pick}
+        onStage={(c) => {
+          p.stage(c);
+        }}
+        onAddDeliverable={addDeliverable}
+        onItemMenu={openItemMenu}
+        onLaneMenu={(id, date, x, y) => showMenu(laneMenu(menuContext, id, date), x, y, displayed.workstreams.find((w) => w.id === id)?.name)}
+        onEmptyMenu={(x, y) => showMenu(emptyMenu(menuContext), x, y)}
+        onOpenDetails={openDetails}
+        onLink={(from, to) => link(from, "successor", to)}
+      />
+      {narrated && (
+        <aside className="narration" key={narrated.seq}>
+          <div className="commit-meta">
+            <span className="seq">#{narrated.seq}</span>
+            <span className="muted">{formatTimestamp(narrated.created_at)}</span>
+            {narrated.category && <span className={`cat cat-${narrated.category}`}>{categoryLabel(categories, narrated.category)}</span>}
+          </div>
+          <div className="narration-reason">“{narrated.reason}”</div>
+          <div className="muted small">
+            {narrated.author}
+            {narrated.reference && <> · {narrated.reference}</>}
+          </div>
+          {showChanges && (
+            <ul className="event-lines">
+              {narratedLines.slice(0, 8).map((l) => (
+                <li key={l.key} className={l.delta ? (l.delta > 0 ? "later" : "earlier") : ""}>
+                  {l.text}
+                </li>
+              ))}
+              {narratedLines.length > 8 && <li className="muted">+{narratedLines.length - 8} more</li>}
+            </ul>
+          )}
+        </aside>
+      )}
+      {!tipSeen && editable && view === "plan" && displayed.workstreams.length > 0 && (
+        <div className="timeline-tip small">
+          Right-click a bar or a lane for actions. Double-click a bar (or press Enter) for its details.
+          <button
+            className="link small"
+            onClick={() => {
+              setTipSeen(true);
+              store("backstroke:tipSeen", "1");
+            }}
+          >
+            Got it
+          </button>
+        </div>
+      )}
+      {p.loading && <div className="loading">Loading…</div>}
+      {p.error && <div className="callout error floating">{p.error}</div>}
+    </section>
+  );
+
+  // Icon tabs: the name is the tooltip; staged edits and a live meeting show as a badge.
+  const tabs: { key: Tab; label: string; badge: string | null; title: string }[] = [
+    { key: "changes", label: "Changes", badge: staged ? String(staged) : null, title: staged ? `Changes · ${staged} staged` : "Changes" },
+    { key: "meetings", label: "Meetings", badge: liveMeeting ? "" : null, title: liveMeeting ? `Meetings · ${liveMeeting.title} in progress` : "Meetings" },
+    { key: "history", label: "History", badge: null, title: "History and compare" },
+    { key: "insights", label: "Insights", badge: null, title: "Insights: metrics and surprises" },
+  ];
+  const tabButton = (t: (typeof tabs)[number], onClick: () => void, className = "") => (
+    <button key={t.key} role="tab" aria-selected={tab === t.key} aria-label={t.title} title={t.title} className={`icon-tab ${className}`} onClick={onClick}>
+      <TabIcon name={t.key} />
+      {t.badge !== null && <span className={`tab-badge ${t.badge ? "count" : "dot"}`}>{t.badge}</span>}
+    </button>
+  );
 
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
-          <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true">
-            <rect x="3" y="7" width="18" height="6" rx="2" fill="var(--accent)" />
-            <rect x="11" y="19" width="18" height="6" rx="2" fill="var(--accent-soft)" />
-          </svg>
-          Backstroke
-          <span className="tagline">Plan forward. Look back.</span>
-        </div>
-        <div className="toolbar">
+        <div className="topbar-row">
+          <div className="brand">
+            <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+              <rect x="3" y="7" width="18" height="6" rx="2" fill="var(--accent)" />
+              <rect x="11" y="19" width="18" height="6" rx="2" fill="var(--accent-soft)" />
+            </svg>
+            Backstroke
+            <span className="tagline">Plan forward. Look back.</span>
+          </div>
+          <div className="spacer" />
           <select className="project-select" value={projectId ?? ""} onChange={(e) => setProjectId(e.target.value || null)} aria-label="Project">
             {projects.map((x) => (
               <option key={x.id} value={x.id}>
@@ -369,63 +631,6 @@ export default function App() {
           <button className="small secondary" onClick={newProject}>
             New project
           </button>
-          <div className="versions">
-            {baseline && (
-              <button className="version-chip" title="Compare baseline with current" onClick={() => (setCompare({ from: baseline.version, to: p.version }), setViewVersion(null), setTab("compare"))}>
-                Baseline: <b>{baseline.name}</b> (#{baseline.version})
-              </button>
-            )}
-            <span className="version-chip">
-              Current: <b>#{p.version}</b>
-            </span>
-          </div>
-          <div className="status-counts" title={`Status as of ${asOf}`}>
-            {statusCounts.done > 0 && <span className="st done">{statusCounts.done} done</span>}
-            {statusCounts.progress > 0 && <span className="st">{statusCounts.progress} in progress</span>}
-            {statusCounts.behind > 0 && <span className="st behind">{statusCounts.behind} behind</span>}
-            {statusCounts.overdue > 0 && <span className="st overdue">{statusCounts.overdue} overdue</span>}
-            {statusCounts.todo > 0 && <span className="st">{statusCounts.todo} not started</span>}
-          </div>
-          <div className="spacer" />
-          {staged > 0 && (
-            <button className="staged-badge" onClick={() => setTab("changes")}>
-              <span className="count">{staged}</span> staged · Review & commit
-            </button>
-          )}
-          {phaseNames.length > 0 && (
-            <div className="color-by" role="group" aria-label="Colour bars by">
-              <span className="muted small">Colour</span>
-              <div className="seg-toggle">
-                {(["lane", "phase"] as ColorBy[]).map((c) => (
-                  <button key={c} aria-pressed={colorBy === c} onClick={() => setColorBy(c)}>
-                    {c === "lane" ? "Lane" : "Phase"}
-                  </button>
-                ))}
-              </div>
-              {colorBy === "phase" && (
-                <span className="phase-legend">
-                  {phaseNames.map((name, i) => (
-                    <span key={name}>
-                      <i style={{ background: PHASE_COLORS[i % PHASE_COLORS.length] }} />
-                      {name}
-                    </span>
-                  ))}
-                  <span>
-                    <i style={{ background: "var(--plain-bar)" }} />
-                    No phases
-                  </span>
-                </span>
-              )}
-            </div>
-          )}
-          <div className="zoom" role="group" aria-label="Zoom">
-            <button className="icon" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))} title="Zoom out">
-              −
-            </button>
-            <button className="icon" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} title="Zoom in">
-              +
-            </button>
-          </div>
           {projectId && (
             <>
               <button className="small link" onClick={() => setKnowledgeOpen(true)} title="The project as one Markdown file to paste into an assistant">
@@ -437,272 +642,306 @@ export default function App() {
             </>
           )}
         </div>
-      </header>
-
-      <main className="workspace" style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}>
-        <section className="timeline-wrap">
-          {!showingLive && (
-            <div className="history-banner">
-              {compare ? (
-                <>
-                  Comparing <b>#{compare.from}</b> → <b>#{compare.to}</b> · read-only
-                </>
-              ) : (
-                <>
-                  Viewing <b>#{viewVersion}</b> of {p.version} · read-only
-                </>
-              )}
-              {!compare && (
-                <label className="toggle">
-                  <input type="checkbox" checked={showChanges} onChange={(e) => setShowChanges(e.target.checked)} /> show what changed
-                </label>
-              )}
-              <button className="small" onClick={() => view(null)}>
-                Return to current
-              </button>
-            </div>
-          )}
-          {showingLive && compare && (
-            <div className="history-banner compare">
-              Ghost bars show <b>#{compare.from}</b>
-              <button className="small" onClick={() => setCompare(null)}>
-                Hide
-              </button>
-            </div>
-          )}
-          <TimelineCanvas
-            state={displayed}
-            ghost={ghost}
-            order={order}
-            dayWidth={ZOOMS[zoom] ?? 16}
-            today={today}
-            editable={editable}
-            animate={!showingLive || playing}
-            stagedIds={stagedIds}
-            conflicts={conflicts}
-            selectedId={selectedId}
-            focusKey={projectId ?? ""}
-            asOf={asOf}
-            expanded={expanded}
-            colorBy={colorBy}
-            onToggleExpand={toggleExpand}
-            onSelect={select}
-            onPick={pick}
-            onStage={(c) => {
-              p.stage(c);
-            }}
-            onAddDeliverable={addDeliverable}
-          />
-          {narrated && (
-            <aside className="narration" key={narrated.seq}>
-              <div className="commit-meta">
-                <span className="seq">#{narrated.seq}</span>
-                <span className="muted">{formatTimestamp(narrated.created_at)}</span>
-                {narrated.category && <span className={`cat cat-${narrated.category}`}>{categoryLabel(categories, narrated.category)}</span>}
-              </div>
-              <div className="narration-reason">“{narrated.reason}”</div>
-              <div className="muted small">
-                {narrated.author}
-                {narrated.reference && <> · {narrated.reference}</>}
-              </div>
-              {showChanges && (
-                <ul className="event-lines">
-                  {narratedLines.slice(0, 8).map((l) => (
-                    <li key={l.key} className={l.delta ? (l.delta > 0 ? "later" : "earlier") : ""}>
-                      {l.text}
-                    </li>
-                  ))}
-                  {narratedLines.length > 8 && <li className="muted">+{narratedLines.length - 8} more</li>}
-                </ul>
-              )}
-            </aside>
-          )}
-          {p.loading && <div className="loading">Loading…</div>}
-          {p.error && <div className="callout error floating">{p.error}</div>}
-        </section>
-
-        <aside className="sidebar">
-          <div
-            className="sidebar-resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            aria-valuenow={sidebarWidth}
-            aria-valuemin={SIDEBAR_MIN}
-            tabIndex={0}
-            title="Drag to resize. Double-click to reset."
-            onPointerDown={startSidebarResize}
-            onDoubleClick={() => setSidebarWidth(clampSidebar(SIDEBAR_DEFAULT))}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-                e.preventDefault();
-                setSidebarWidth((w) => clampSidebar(w + (e.key === "ArrowLeft" ? 24 : -24)));
-              }
-            }}
-          />
-          <nav className="tabs" role="tablist">
+        <div className="toolbar">
+          <nav className="view-nav" aria-label="Views">
             {(
               [
-                ["inspect", "Inspector"],
-                ["changes", `Changes${staged ? ` (${staged})` : ""}`],
-                ["history", "History"],
-                ["compare", "Compare"],
-                ["metrics", "Metrics"],
-                ["meetings", "Meetings"],
-                ["register", `Register${overdueActions ? ` (${overdueActions} overdue)` : ""}`],
-                ["people", "People"],
-              ] as [Tab, string][]
-            ).map(([key, label]) => (
-              <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
+                ["plan", "Plan", null],
+                ["register", "Register", overdueActions ? `${overdueActions} overdue` : null],
+                ["people", "People", null],
+              ] as [View, string, string | null][]
+            ).map(([key, label, badge]) => (
+              <button key={key} aria-current={view === key ? "page" : undefined} className={view === key ? "active" : ""} onClick={() => setView(key)}>
                 {label}
+                {badge && <span className={`nav-badge ${key === "register" ? "overdue" : "live"}`}>{badge}</span>}
               </button>
             ))}
           </nav>
-          <div className="tab-body">
-            {tab === "inspect" && (
-              <InspectorPanel
-                state={displayed}
-                persisted={p.persisted}
-                selectedId={selectedId}
-                editable={editable}
-                stagedIds={stagedIds}
-                asOf={asOf}
-                onProgress={recordProgress}
-                onStage={p.stage}
-                onRevert={(id) => p.revert("deliverable", id)}
-                onSelect={select}
-                onAddDeliverable={addDeliverable}
-              />
+          {timelineShown && (
+            <>
+              <div className="versions">
+                {baseline && (
+                  <button className="version-chip" title="Compare baseline with current" onClick={() => showCompare({ from: baseline.version, to: p.version })}>
+                    Baseline: <b>{baseline.name}</b> (#{baseline.version})
+                  </button>
+                )}
+                <span className="version-chip">
+                  Current: <b>#{p.version}</b>
+                </span>
+              </div>
+              <div className="status-counts" title={`Status as of ${asOf}`}>
+                {statusCounts.done > 0 && <span className="st done">{statusCounts.done} done</span>}
+                {statusCounts.progress > 0 && <span className="st">{statusCounts.progress} in progress</span>}
+                {statusCounts.behind > 0 && <span className="st behind">{statusCounts.behind} behind</span>}
+                {statusCounts.overdue > 0 && <span className="st overdue">{statusCounts.overdue} overdue</span>}
+                {statusCounts.todo > 0 && <span className="st">{statusCounts.todo} not started</span>}
+              </div>
+              <div className="spacer" />
+              {staged > 0 && (
+                <button className="staged-badge" onClick={() => showTab("changes")}>
+                  <span className="count">{staged}</span> staged · Review & commit
+                </button>
+              )}
+              {phaseNames.length > 0 && (
+                <div className="color-by" role="group" aria-label="Colour bars by">
+                  <span className="muted small">Colour</span>
+                  <div className="seg-toggle">
+                    {(["lane", "phase"] as ColorBy[]).map((c) => (
+                      <button key={c} aria-pressed={colorBy === c} onClick={() => setColorBy(c)}>
+                        {c === "lane" ? "Lane" : "Phase"}
+                      </button>
+                    ))}
+                  </div>
+                  {colorBy === "phase" && (
+                    <span className="phase-legend">
+                      {phaseNames.map((name, i) => (
+                        <span key={name}>
+                          <i style={{ background: PHASE_COLORS[i % PHASE_COLORS.length] }} />
+                          {name}
+                        </span>
+                      ))}
+                      <span>
+                        <i style={{ background: "var(--plain-bar)" }} />
+                        No phases
+                      </span>
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="zoom" role="group" aria-label="Zoom">
+                <button className="icon" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))} title="Zoom out">
+                  −
+                </button>
+                <button className="icon" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} title="Zoom in">
+                  +
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </header>
+
+      {view === "plan" && (
+        <main className={`workspace ${sidebarOpen ? "" : "panel-closed"}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}>
+          <div className="plan-main">
+            {liveMeeting && !meetingsShown && (
+              <div className="meeting-return">
+                <span>
+                  <span className="live-dot" /> <b>{liveMeeting.title}</b> is in progress
+                </span>
+                <button className="small" onClick={() => showTab("meetings")}>
+                  Back to notes
+                </button>
+              </div>
             )}
-            {tab === "inspect" && projectId && selectedId && showingLive && p.persisted.deliverables.some((d) => d.id === selectedId) && (
-              <DeliverableHistory projectId={projectId} deliverableId={selectedId} refreshKey={recordsKey} onViewCommit={viewCommit} onOpenMeeting={openMeeting} />
-            )}
-            {tab === "changes" && (
-              <StagedChangesDrawer
-                staged={p.staged}
-                persisted={p.persisted}
-                proposed={p.proposed}
-                preview={p.preview}
-                selection={p.selection}
-                selectionPreview={p.selectionPreview}
-                excluded={p.excluded}
-                editable={live}
-                onToggle={p.toggleSelected}
-                onSelectAll={p.selectAll}
-                onUnstage={p.unstage}
-                onDiscard={() => window.confirm(`Discard ${staged} staged change${staged === 1 ? "" : "s"}?`) && p.discard()}
-                onSelect={(id) => {
-                  view(null);
-                  setSelectedId(id);
-                }}
-                onApplySuggestions={applySuggestions}
-                onCommit={() => setCommitOpen(true)}
-              />
-            )}
-            {tab === "history" && (
-              <HistoryPanel
-                commits={p.commits}
-                version={p.version}
-                viewVersion={compare ? null : viewVersion}
-                categories={categories}
-                stateFor={p.cachedStateAt}
-                onView={(seq) => {
-                  setPlaying(false);
-                  view(seq);
-                  if (seq !== null) {
-                    p.stateAt(seq);
-                    if (seq > 0) p.stateAt(seq - 1);
+            {timeline}
+          </div>
+
+          {sidebarOpen ? (
+            <aside className="sidebar">
+              <div
+                className="sidebar-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize sidebar"
+                aria-valuenow={sidebarWidth}
+                aria-valuemin={SIDEBAR_MIN}
+                tabIndex={0}
+                title="Drag to resize. Double-click to reset."
+                onPointerDown={startSidebarResize}
+                onDoubleClick={() => setSidebarWidth(clampSidebar(SIDEBAR_DEFAULT))}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                    e.preventDefault();
+                    setSidebarWidth((w) => clampSidebar(w + (e.key === "ArrowLeft" ? 24 : -24)));
                   }
                 }}
-                onCompareWithCurrent={(seq) => {
-                  setCompare({ from: seq, to: p.version });
-                  setViewVersion(null);
-                  setTab("compare");
-                }}
-                onRevert={revertCommit}
-                onBaseline={tagBaseline}
               />
-            )}
-            {tab === "compare" && projectId && (
-              <ComparePanel
-                projectId={projectId}
-                commits={p.commits}
-                baselines={p.project?.baselines ?? []}
-                version={p.version}
-                range={compare}
-                onChange={(r) => {
-                  setPlaying(false);
-                  setCompare(r);
-                  setViewVersion(r && r.to !== p.version ? r.to : null);
-                }}
-                onSelect={setSelectedId}
-              />
-            )}
-            {tab === "metrics" && projectId && (
-              <>
-                <MetricsPanel projectId={projectId} version={p.version} baselines={p.project?.baselines ?? []} categories={categories} onSelect={select} />
-                <SurpriseIndex projectId={projectId} refreshKey={recordsKey} onViewCommit={viewCommit} />
-              </>
-            )}
-            {tab === "meetings" && projectId && (
-              <MeetingsPanel
-                projectId={projectId}
-                refreshKey={recordsKey}
-                store={meetings}
-                deliverables={p.proposed.deliverables}
-                today={today}
-                openId={openMeetingId}
-                onOpen={setOpenMeetingId}
-                mentionRequest={mentionRequest}
-                stagedCount={p.selection.changes.length}
-                onReviewChanges={() => setTab("changes")}
-                onFinish={setFinishing}
-                onViewCommit={viewCommit}
-                onSelectDeliverable={setSelectedId}
-              />
-            )}
-            {tab === "register" && (
-              <RegisterPanel
-                register={meetings.register}
-                deliverables={p.persisted.deliverables}
-                today={today}
-                onSelectDeliverable={select}
-                people={meetings.people}
-                onCreate={meetings.createItem}
-                onUpdate={meetings.updateItem}
-              />
-            )}
-            {tab === "people" && projectId && (
-              <PeoplePanel
-                people={meetings.people}
-                unlisted={[
-                  ...new Set([
-                    ...meetings.meetings.flatMap((m) => m.attendees.map((a) => a.name)),
-                    ...meetings.register.flatMap((i) => (i.owner ? [i.owner] : [])),
-                  ]),
-                ].filter((n) => !meetings.people.some((x) => x.name.toLowerCase() === n.toLowerCase() || x.group?.toLowerCase() === n.toLowerCase()))}
-                onSave={meetings.savePeople}
-              />
-            )}
-          </div>
-        </aside>
-      </main>
+              <nav className="tabs" role="tablist">
+                {tabs.map((t) => tabButton(t, () => setTab(t.key), tab === t.key ? "active" : ""))}
+                <span className="tab-name">{tabs.find((t) => t.key === tab)?.label}</span>
+                <span className="spacer" />
+                <button className="icon collapse" title="Hide the panel" aria-label="Hide the panel" onClick={() => setSidebarOpen(false)}>
+                  »
+                </button>
+              </nav>
+              <div className="tab-body">
+                {tab === "changes" && (
+                  <StagedChangesDrawer
+                    staged={p.staged}
+                    persisted={p.persisted}
+                    proposed={p.proposed}
+                    preview={p.preview}
+                    selection={p.selection}
+                    selectionPreview={p.selectionPreview}
+                    excluded={p.excluded}
+                    editable={live}
+                    onToggle={p.toggleSelected}
+                    onSelectAll={p.selectAll}
+                    onUnstage={p.unstage}
+                    onDiscard={() => window.confirm(`Discard ${staged} staged change${staged === 1 ? "" : "s"}?`) && p.discard()}
+                    onSelect={(id) => {
+                      showVersion(null);
+                      openDetails(id);
+                    }}
+                    onApplySuggestions={applySuggestions}
+                    onCommit={() => setCommitOpen(true)}
+                  />
+                )}
+                {tab === "history" && (
+                  <>
+                    <div className="seg-toggle history-mode" role="group" aria-label="History">
+                      <button aria-pressed={historyMode === "commits"} onClick={() => setHistoryMode("commits")}>
+                        Commits
+                      </button>
+                      <button aria-pressed={historyMode === "compare"} onClick={() => setHistoryMode("compare")}>
+                        Compare versions
+                      </button>
+                    </div>
+                    {historyMode === "commits" ? (
+                      <HistoryPanel
+                        commits={p.commits}
+                        version={p.version}
+                        viewVersion={compare ? null : viewVersion}
+                        categories={categories}
+                        stateFor={p.cachedStateAt}
+                        onView={(seq) => {
+                          setPlaying(false);
+                          showVersion(seq);
+                          if (seq !== null) {
+                            p.stateAt(seq);
+                            if (seq > 0) p.stateAt(seq - 1);
+                          }
+                        }}
+                        onCompareWithCurrent={(seq) => showCompare({ from: seq, to: p.version })}
+                        onRevert={revertCommit}
+                        onBaseline={tagBaseline}
+                      />
+                    ) : (
+                      projectId && (
+                        <ComparePanel
+                          projectId={projectId}
+                          commits={p.commits}
+                          baselines={p.project?.baselines ?? []}
+                          version={p.version}
+                          range={compare}
+                          onChange={(r) => {
+                            setPlaying(false);
+                            setCompare(r);
+                            setViewVersion(r && r.to !== p.version ? r.to : null);
+                          }}
+                          onSelect={openDetails}
+                        />
+                      )
+                    )}
+                  </>
+                )}
+                {tab === "meetings" && projectId && (
+                  <MeetingsView
+                    projectId={projectId}
+                    refreshKey={recordsKey}
+                    store={meetings}
+                    deliverables={p.proposed.deliverables}
+                    today={today}
+                    openId={openMeetingId}
+                    onOpen={openMeetingNotes}
+                    mentionRequest={mentionRequest}
+                    stagedCount={p.selection.changes.length}
+                    onReviewChanges={() => setTab("changes")}
+                    onFinish={setFinishing}
+                    onViewCommit={viewCommit}
+                    onSelectDeliverable={focusDeliverable}
+                  />
+                )}
+                {tab === "insights" && projectId && (
+                  <>
+                    <MetricsPanel projectId={projectId} version={p.version} baselines={p.project?.baselines ?? []} categories={categories} onSelect={openDetails} />
+                    <SurpriseIndex projectId={projectId} refreshKey={recordsKey} onViewCommit={viewCommit} />
+                  </>
+                )}
+              </div>
+            </aside>
+          ) : (
+            <aside className="sidebar-rail" aria-label="Panel">
+              <button className="icon" title="Show the panel" aria-label="Show the panel" onClick={() => setSidebarOpen(true)}>
+                «
+              </button>
+              {tabs.map((t) =>
+                tabButton(t, () => {
+                  setTab(t.key);
+                  setSidebarOpen(true);
+                }),
+              )}
+            </aside>
+          )}
+        </main>
+      )}
 
-      <footer>
-        <PlaybackControls
-          version={p.version}
-          viewVersion={compare ? (compare.to === p.version && live ? null : compare.to) : viewVersion}
-          commits={p.commits}
-          playing={playing}
-          hasStaged={staged > 0}
-          onView={(seq) => {
-            setPlaying(false);
-            view(seq === p.version && viewVersion === null ? null : seq);
-          }}
-          onPlay={play}
-          onPause={() => setPlaying(false)}
+      {view === "register" && projectId && (
+        <main className="workspace single">
+          <RegisterView
+            projectId={projectId}
+            author={author}
+            register={meetings.register}
+            deliverables={p.persisted.deliverables}
+            today={today}
+            onSelectDeliverable={focusDeliverable}
+            people={meetings.people}
+            onCreate={meetings.createItem}
+            onUpdate={meetings.updateItem}
+          />
+        </main>
+      )}
+
+      {view === "people" && projectId && (
+        <main className="workspace single">
+          <PeopleView roster={{ people: meetings.people, groups: meetings.groups }} unlisted={unlistedPeople} onSave={meetings.savePeople} />
+        </main>
+      )}
+
+      {view === "plan" && (
+        <footer>
+          <PlaybackControls
+            version={p.version}
+            viewVersion={compare ? (compare.to === p.version && live ? null : compare.to) : viewVersion}
+            commits={p.commits}
+            playing={playing}
+            hasStaged={staged > 0}
+            onView={(seq) => {
+              setPlaying(false);
+              showVersion(seq === p.version && viewVersion === null ? null : seq);
+            }}
+            onPlay={play}
+            onPause={() => setPlaying(false)}
+          />
+        </footer>
+      )}
+
+      {timelineShown && details && displayed.deliverables.some((d) => d.id === details.id) && projectId && (
+        <DetailsCard
+          id={details.id}
+          tab={details.tab}
+          onTab={(t) => setDetails({ ...details, tab: t, focusName: false })}
+          focusName={details.focusName}
+          state={displayed}
+          persisted={p.persisted}
+          editable={editable}
+          stagedIds={stagedIds}
+          asOf={asOf}
+          projectId={projectId}
+          hasHistory={showingLive && p.persisted.deliverables.some((d) => d.id === details.id)}
+          refreshKey={recordsKey}
+          onStage={p.stage}
+          onRevert={(id) => p.revert("deliverable", id)}
+          onSelect={(id) => (id ? openDetails(id) : (setSelectedId(null), setDetails(null)))}
+          onProgress={recordProgress}
+          onViewCommit={viewCommit}
+          onOpenMeeting={openMeeting}
+          onClose={() => setDetails(null)}
         />
-      </footer>
+      )}
+      {menu && <ContextMenu request={menu} onClose={() => setMenu(null)} />}
+      {prompt && <QuickPrompt request={prompt} onClose={() => setPrompt(null)} />}
 
       {commitOpen && (
         <CommitDialog
@@ -725,6 +964,7 @@ export default function App() {
               flash(`Committed #${commit.seq}: ${commit.reason} · ${left} change${left === 1 ? "" : "s"} still staged`);
             } else {
               setTab("history");
+              setHistoryMode("commits");
               flash(`Committed #${commit.seq}: ${commit.reason}`);
             }
           }}

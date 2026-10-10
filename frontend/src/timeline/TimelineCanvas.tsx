@@ -44,6 +44,27 @@ interface Props {
   onPick?: (id: string) => void;
   onStage: (change: Change) => void;
   onAddDeliverable: (workstreamId: string, date?: string) => void;
+  /** Right-click (or the ⋯ button) on a bar; `phase` is the phase under the cursor. */
+  onItemMenu?: (id: string, phase: number | null, x: number, y: number) => void;
+  /** Right-click on a lane's label or row; `date` is the day under the cursor on the row. */
+  onLaneMenu?: (workstreamId: string, date: string | undefined, x: number, y: number) => void;
+  /** Right-click below the lanes. */
+  onEmptyMenu?: (x: number, y: number) => void;
+  onOpenDetails?: (id: string) => void;
+  /** Picking a bar to link to this one: clicks pick instead of selecting or dragging. */
+  linkingFrom?: string | null;
+  /** A connector was dragged from `from`'s end onto `to`: `to` should depend on `from`. */
+  onLink?: (from: string, to: string) => void;
+}
+
+interface LinkDrag {
+  from: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  /** The bar under the pointer, if it can be linked. */
+  target: string | null;
 }
 
 function applyDrag(d: Deliverable, drag: DragState | null): Deliverable {
@@ -111,6 +132,7 @@ export function TimelineCanvas(props: Props) {
   const { state, ghost, order, dayWidth, today, editable, animate, stagedIds, conflicts, selectedId, expanded, colorBy } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [linkDrag, setLinkDrag] = useState<LinkDrag | null>(null);
 
   const model = useMemo(() => buildTimelineModel({ state, ghost, order, expanded, dayWidth, today }), [state, ghost, order, expanded, dayWidth, today]);
   const phaseOrder = useMemo(() => phaseNameOrder(state.deliverables), [state.deliverables]);
@@ -142,19 +164,55 @@ export function TimelineCanvas(props: Props) {
   }, [dayWidth]);
 
   useEffect(() => {
-    if (!drag) return;
+    if (!drag && !linkDrag) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDrag(null);
+      if (e.key === "Escape") {
+        setDrag(null);
+        setLinkDrag(null);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drag]);
+  }, [drag, linkDrag]);
+
+  /** Bars already linked to `id` either way, and `id` itself: they can't be linked again. */
+  const linkedTo = (id: string) => {
+    const out = new Set([id]);
+    for (const dep of state.dependencies) {
+      if (dep.predecessor_id === id) out.add(dep.successor_id);
+      if (dep.successor_id === id) out.add(dep.predecessor_id);
+    }
+    return out;
+  };
+
+  function startLinkDrag(e: React.PointerEvent, item: TimelineItem, x: number, y: number) {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    setLinkDrag({ from: item.id, x1: x, y1: y, x2: x, y2: y, target: null });
+  }
+  function moveLinkDrag(e: React.PointerEvent) {
+    if (!linkDrag) return;
+    const svg = (e.currentTarget as SVGElement).ownerSVGElement!;
+    const r = svg.getBoundingClientRect();
+    const hit = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-item-id]")?.getAttribute("data-item-id") ?? null;
+    const target = hit && !linkedTo(linkDrag.from).has(hit) && model.items.get(hit)?.status !== "removed" ? hit : null;
+    setLinkDrag({ ...linkDrag, x2: e.clientX - r.left, y2: e.clientY - r.top, target });
+  }
+  function endLinkDrag() {
+    if (linkDrag?.target) props.onLink?.(linkDrag.from, linkDrag.target);
+    setLinkDrag(null);
+  }
 
   const drawn = (item: TimelineItem) => applyDrag(item.deliverable, drag);
 
   function onPointerDown(e: React.PointerEvent, item: TimelineItem) {
-    if (e.button !== 0) return;
     e.stopPropagation();
+    if (e.button !== 0) return;
+    if (props.linkingFrom) {
+      if (item.id !== props.linkingFrom && item.status !== "removed") props.onPick?.(item.id);
+      return;
+    }
     props.onSelect(item.id);
     if (!editable || item.status === "removed") {
       props.onPick?.(item.id);
@@ -219,11 +277,23 @@ export function TimelineCanvas(props: Props) {
     }
   }
 
+  const itemMenu = (e: React.MouseEvent, item: TimelineItem) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (drag || props.linkingFrom) return;
+    // The phase under the cursor, by date: the bar's outline sits on top of the segments.
+    const svg = (e.currentTarget as SVGElement).ownerSVGElement!;
+    const day = model.dayAt(e.clientX - svg.getBoundingClientRect().left);
+    const span = item.deliverable.type === "task" ? phaseSpans(item.deliverable).find((sp) => day >= sp.start && day <= sp.end) : undefined;
+    props.onSelect(item.id);
+    props.onItemMenu?.(item.id, span ? span.index : null, e.clientX, e.clientY);
+  };
+
   const dragging = drag ? model.items.get(drag.id) : null;
   const dragPreview = dragging ? drawn(dragging) : null;
 
   return (
-    <div className={`timeline ${drag ? "is-dragging" : ""}`} ref={scrollRef}>
+    <div className={`timeline ${drag ? "is-dragging" : ""} ${props.linkingFrom ? "is-linking" : ""}`} ref={scrollRef}>
       <div className="tl-grid" style={{ gridTemplateColumns: `${LABEL_WIDTH}px ${model.width}px` }}>
         <div className="tl-corner" style={{ height: HEADER_HEIGHT }}>
           <span>Workstream</span>
@@ -262,6 +332,10 @@ export function TimelineCanvas(props: Props) {
               key={lane.workstream.id}
               className={`lane-label ${lane.removed ? "removed" : ""}`}
               style={{ height: lane.height, ["--lane-color" as string]: LANE_COLORS[i % LANE_COLORS.length] }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                if (!lane.removed) props.onLaneMenu?.(lane.workstream.id, undefined, e.clientX, e.clientY);
+              }}
             >
               <span className="lane-swatch" />
               <span className="lane-name" title={lane.workstream.name}>
@@ -288,7 +362,11 @@ export function TimelineCanvas(props: Props) {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={() => setDrag(null)}
-          onPointerDown={() => props.onSelect(null)}
+          onPointerDown={() => !props.linkingFrom && props.onSelect(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            if (!drag) props.onEmptyMenu?.(e.clientX, e.clientY);
+          }}
         >
           <defs>
             <pattern id="overrun-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -325,6 +403,13 @@ export function TimelineCanvas(props: Props) {
                 if (!editable || lane.removed) return;
                 const svg = (e.currentTarget as SVGElement).ownerSVGElement!;
                 props.onAddDeliverable(lane.workstream.id, model.dayAt(e.clientX - svg.getBoundingClientRect().left));
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (drag || lane.removed) return;
+                const svg = (e.currentTarget as SVGElement).ownerSVGElement!;
+                props.onLaneMenu?.(lane.workstream.id, model.dayAt(e.clientX - svg.getBoundingClientRect().left), e.clientX, e.clientY);
               }}
             />
           ))}
@@ -393,7 +478,9 @@ export function TimelineCanvas(props: Props) {
             const rx = (day: string) => model.x(day) - g.x; // relative to the bar's left edge
             const overrunEnd = status?.kind === "overdue" ? rx(addDays(props.asOf, 1)) : 0;
             const checkX = status?.kind === "done" ? rx(status.finishedOn!) + dayWidth / 2 : null;
-            const classes = ["item", d.type, phased && "phased", status && `st-${status.kind}`, staged && "staged", selected && "selected", removed && "removed", editable && !removed && "editable", conflict && "conflict", animate && !drag && "animate"]
+            const linkSource = props.linkingFrom === item.id;
+            const linkTarget = linkDrag?.target === item.id;
+            const classes = ["item", d.type, phased && "phased", status && `st-${status.kind}`, staged && "staged", (selected || linkSource) && "selected", removed && "removed", editable && !removed && "editable", conflict && "conflict", animate && !drag && "animate", props.linkingFrom && !linkSource && !removed && "link-target", linkTarget && "link-hover"]
               .filter(Boolean)
               .join(" ");
             const labelInside = d.type === "task" && !phased && g.w > d.name.length * 6.6 + 16;
@@ -406,6 +493,10 @@ export function TimelineCanvas(props: Props) {
             // milestone's centre), so moving between versions is a single animatable transform.
             const barTop = -BAR_HEIGHT / 2;
             let afterX = Math.max(g.right - g.x, overrunEnd, checkX === null ? 0 : checkX + 8) + 6;
+            // The selected bar gets a connector at its end: drag it onto another bar to link them.
+            const connectorX = g.right - g.x + 8;
+            const showConnector = selected && editable && !removed && !drag && !props.linkingFrom && !!props.onLink && (!linkDrag || linkDrag.from === item.id);
+            if (showConnector) afterX = Math.max(afterX, connectorX + 10);
             const chips: { text: string; cls: string }[] = [];
             if (staged) chips.push({ text: "pending", cls: "pending" });
             if (status?.kind === "done") chips.push({ text: `done ${formatDate(status.finishedOn!)}${status.delta ? ` · ${signedDays(status.delta)}` : ""}`, cls: "done" });
@@ -422,13 +513,22 @@ export function TimelineCanvas(props: Props) {
             if (phased && !removed) afterX += 22;
             const outsideLabelX = afterX;
             if (!labelInside) afterX += d.name.length * 6.6 + 8;
+            const moreX = afterX + 10;
+            const showMore = selected && !removed && !drag && !linkDrag && !props.linkingFrom && !!props.onItemMenu;
+            if (showMore) afterX += 26;
 
             return (
               <g
                 key={item.id}
                 className={classes}
                 style={{ ["--bar" as string]: color, transform: `translate(${g.x}px, ${g.cy}px)` }}
+                data-item-id={item.id}
                 onPointerDown={(e) => onPointerDown(e, item)}
+                onContextMenu={(e) => itemMenu(e, item)}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  if (!props.linkingFrom && !removed) props.onOpenDetails?.(item.id);
+                }}
               >
                 <title>{title}</title>
                 {d.type === "milestone" ? (
@@ -542,6 +642,35 @@ export function TimelineCanvas(props: Props) {
                 <text x={labelInside ? 8 : outsideLabelX} y={4} className={`bar-label ${labelInside ? "inside" : ""}`}>
                   {d.name}
                 </text>
+                {showConnector && (
+                  <g
+                    className="connector"
+                    transform={`translate(${connectorX}, 0)`}
+                    onPointerDown={(e) => startLinkDrag(e, item, g.x + connectorX, g.cy)}
+                    onPointerMove={moveLinkDrag}
+                    onPointerUp={endLinkDrag}
+                    onPointerCancel={() => setLinkDrag(null)}
+                  >
+                    <title>Drag onto another bar to make it depend on this one</title>
+                    <circle r={9} className="connector-hit" />
+                    <circle r={4.5} />
+                  </g>
+                )}
+                {showMore && (
+                  <g
+                    className="more-btn"
+                    transform={`translate(${moreX}, 0)`}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      const r = (e.currentTarget as SVGGElement).getBoundingClientRect();
+                      props.onItemMenu!(item.id, null, r.left, r.bottom + 4);
+                    }}
+                  >
+                    <title>Actions (right-click the bar, or Shift+F10)</title>
+                    <rect x={-10} y={-9} width={20} height={18} rx={5} />
+                    <path d="M-5,0 h0.01 M0,0 h0.01 M5,0 h0.01" />
+                  </g>
+                )}
                 {chips.map((chip) => {
                   const w = chip.text.length * 6 + 12;
                   const x = afterX;
@@ -593,6 +722,17 @@ export function TimelineCanvas(props: Props) {
             );
           })}
 
+          {linkDrag && (
+            <g className="link-drag">
+              <path d={`M${linkDrag.x1},${linkDrag.y1} L${linkDrag.x2},${linkDrag.y2}`} markerEnd="url(#arrow)" className={linkDrag.target ? "ok" : ""} />
+              <text x={linkDrag.x2 + 12} y={linkDrag.y2 - 18} className="link-drag-label">
+                {linkDrag.target
+                  ? `${model.items.get(linkDrag.target)?.deliverable.name} depends on ${model.items.get(linkDrag.from)?.deliverable.name}`
+                  : "Drop on the bar that depends on this one"}
+              </text>
+            </g>
+          )}
+
           {dragPreview && dragging && drag && drag.delta !== 0 && drag.mode === "boundary" && (() => {
             const spans = phaseSpans(dragPreview);
             const sp = spans[drag.boundary!];
@@ -630,7 +770,22 @@ export function TimelineCanvas(props: Props) {
           )}
         </svg>
       </div>
-      {model.lanes.length === 0 && <div className="timeline-empty">No workstreams yet. Add one from the Inspector to start planning.</div>}
+      {model.lanes.length === 0 && (
+        <div className="timeline-empty">
+          No workstreams yet.{" "}
+          {editable && props.onEmptyMenu && (
+            <button
+              className="small"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                props.onEmptyMenu!(r.left, r.bottom + 4);
+              }}
+            >
+              + Add workstream
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

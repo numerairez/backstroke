@@ -35,17 +35,33 @@ Reset the demo data with `cd backend && .venv/bin/python -m app.seed --reset`.
 
 1. Drag the right edge of **Data Mapping** 7 days later (9 Oct → 16 Oct).
 2. Open **Changes**. It flags a dependency conflict and suggests moving Data Ready and UAT +7d. Click **Stage suggested moves**.
-3. Select **Go-Live** and set its date to 6 Nov.
+3. Double-click **Go-Live** and set its date to 6 Nov in its details card.
 4. Click **Commit 4 changes…**, enter a reason, pick *Dependency*, and commit.
 5. Press **←** to step back to the previous version (read-only, with ghost bars). Press **→** to return.
 6. Click the **Baseline** chip to compare v1 with current, or press **▶** to play back the whole history.
+
+## Layout
+
+The top bar switches between three views, and Meetings lives beside the plan:
+
+- **Plan**: the timeline, with a side panel whose icon tabs are **Changes** (staged edits and commit; a badge counts them), **Meetings** (a dot while one is in progress), **History** (commits, or compare two versions) and **Insights** (metrics and the surprise index). Hover an icon for its name. Hide the panel with **»** to give the timeline the full width.
+- **Meetings** (in the Plan's side panel): the meeting list, or one meeting's participants (one line of names, click to mark absent), notes, picked-up items, pre-read and open actions. Opening a meeting widens the panel to at least 640px; widen it further and the meeting shows as three columns (pre-read | notes | participants). Clicking a bar mentions it in the notes.
+- **Register**: actions, risks, issues and decisions as one table, filtered by type, owner (a person or a group) and text. Nothing is ever deleted: **Close…** asks why (an action is done or dropped; a risk mitigated, passed, accepted or happened; an issue resolved or accepted), and **Open only** hides what's closed. A risk that happened becomes an issue, either a new one carrying over its text, owner and deliverables or one already raised. Click an item's ref for its history: every edit, closure and reopening, with who, the meeting it happened in, and why. Write an issue in meeting notes as `!issue`.
+- **People**: the project's people and groups. Someone can be in any number of groups, and `@Group` in notes or as an owner means everyone in it.
+
+Edit the plan from the timeline itself:
+
+- **Right-click a bar** (or select it and press Shift+F10, or click its **⋯**) to rename it, mark it or a phase done, change its type or lane, manage phases and dependencies, or delete it. Right-clicking a phase offers that phase's actions.
+- **Double-click a bar**, or press Enter, for its details card: dates, phases, dependencies, and a **History** tab showing why it is where it is. Drag the card's header to move it.
+- **Right-click a lane** to add a deliverable or milestone on the day under the cursor, rename or reorder the lane, add another, or delete an empty one.
+- **Link two bars:** select one and drag the dot at its end onto the bar that depends on it. Or use **Dependencies → Depends on… / Blocks…** in the menu and click the other bar. Esc cancels either.
 
 ## Phases
 
 A bar can optionally be broken into ordered phases, such as a Jira ticket's Dev, Review and UAT. Bars without phases work exactly as before. The seeded **Checkout Revamp** project mixes both.
 
-- **Add or remove:** select a bar and use **Break into phases** in the Inspector. The same section renames, resizes, adds and removes phases.
-- **Gaps:** a phase starts the day after the previous one ends. Give it a later **Starts** date in the Inspector to leave a gap, for example while the team works on something else. Gaps show as a dotted stretch inside the bar.
+- **Add or remove:** right-click a bar and use **Phases → Break into Dev, Review, UAT**. The same menu renames, adds and removes phases, and the details card resizes them.
+- **Gaps:** a phase starts the day after the previous one ends. Give it a later **Starts** date in the details card to leave a gap, for example while the team works on something else. Gaps show as a dotted stretch inside the bar.
 - **Move a boundary:** drag the line between two phases. The next phase, or the gap if there is one, absorbs the change, so the end date holds. Hold **Shift** to push the later phases and the end date instead. Hold **Alt** to move only the next phase's start, opening a gap.
 - **See them:** the arrow after a phased bar lists its phases on rows of their own. **Colour → Phase** in the top bar gives each phase one colour across all lanes, and greys out bars without phases.
 - **Compare:** the thin strip under a bar shows the comparison version's phases. Compare lists each phase's change (for example *Dev +5d, gap before Review +2d*), and **Metrics → Where the time went** adds those changes up per phase since the baseline, with gaps totalled as *between phases*.
@@ -56,7 +72,7 @@ Existing databases get the new projection column on startup. To see Checkout Rev
 
 ## Progress
 
-Plans say when work should finish; progress records when it did. Select a bar and use **Mark done** in the Inspector (the finish date defaults to today). For a bar with phases, mark each phase done: phases finish in order, and the bar is done when its last phase is. **Reopen** undoes it (reopening a phase also reopens the ones after it). Milestones aren't marked done.
+Plans say when work should finish; progress records when it did. Right-click a bar and use **Mark done** (today, yesterday, or pick a date), or use the details card. For a bar with phases, mark each phase done: phases finish in order, and the bar is done when its last phase is. **Reopen** undoes it (reopening a phase also reopens the ones after it). Milestones aren't marked done.
 
 Status is worked out from the plan, the finish dates and today, and shown on the bar and in the top bar:
 
@@ -86,7 +102,9 @@ backend/app/
 frontend/src/
   timeline/   model.ts (renderer-independent layout), TimelineCanvas.tsx (SVG)
   state/      staging.ts (staged-change model), useProject.ts, dates.ts
-  components/ InspectorPanel, StagedChangesDrawer, CommitDialog
+  timeline/   menus.ts (right-click menus for bars, phases and lanes)
+  components/ ContextMenu, DetailsCard, DeliverableDetails, StagedChangesDrawer, CommitDialog,
+              MeetingsView (list and one meeting, in the side panel), RegisterView, PeopleView
   history/    HistoryPanel, PlaybackControls, ComparePanel, MetricsPanel
 ```
 
@@ -106,6 +124,9 @@ frontend/src/
 | `GET /api/projects/{id}/diff?from=&to=` | Field-level diff of two versions |
 | `GET/POST /api/projects/{id}/baselines` | Named pointers to commits |
 | `GET /api/projects/{id}/metrics[?baseline=]` | Churn, net movement, recovery, reason attribution, propagation |
+| `GET/PUT /api/projects/{id}/people` | The project's people and groups (`{people: [{name, groups}], groups}`), saved whole |
+| `GET/POST /api/projects/{id}/register`, `PATCH .../register/{item}` | Register items; closing takes an `outcome`, and every change is kept |
+| `GET /api/projects/{id}/register/{item}/history` | One item's history, oldest first |
 | `GET /api/projects/{id}/export` | Full history as JSON |
 
 Interactive docs are at http://localhost:8000/docs.
@@ -123,5 +144,5 @@ cd frontend && npm test                         # staging model
 - Importing from an export
 - Scenario branches
 - Dependency types other than finish-to-start
-- Dragging a bar to another lane (change the lane in the Inspector)
+- Dragging a bar to another lane (right-click it and use **Move to lane**)
 - Authentication (the author is a free-text name)

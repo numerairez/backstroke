@@ -50,7 +50,8 @@ def test_register_and_meetings(client, pid):
     assert "| A-2 | Name an owner for the escalation tool API by 1 Oct | Marco | Agent Build | Steering committee 2026-09-24 | 2026-10-01 | done 2026-09-30 |" in text
     assert "Absent: Lena" in text
     assert "> ?risk @Ravi vendor feed schema may change late" in text
-    assert "- Register: 1 open action (1 overdue), 2 open risks, 2 active decisions." in text
+    assert "- Register: 1 open action (1 overdue), 2 open risks, 0 open issues, 2 active decisions." in text
+    assert "- 2026-09-30 · A-2: closed as done · Priya (PMO)" in text
 
 
 def test_options_leave_out_history_notes_and_closed_items(client, pid):

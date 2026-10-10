@@ -35,7 +35,7 @@ def test_seed_has_meetings_and_a_register(client, pid):
     ]
     items = register(client, pid)
     assert sorted(items) == ["A-1", "A-2", "D-1", "D-2", "R-1", "R-2"]
-    assert items["A-2"]["status"] == "done" and items["A-2"]["closed_on"] == "2026-09-30"
+    assert items["A-2"]["status"] == "closed" and items["A-2"]["outcome"] == "done" and items["A-2"]["closed_on"] == "2026-09-30"
     assert items["A-1"]["open"] and items["A-1"]["meeting"]["held_on"] == "2026-09-24"
 
 
@@ -144,12 +144,19 @@ def test_item_validation(client, pid):
 def test_actions_close_and_reopen(client, pid):
     item = client.post(f"/api/projects/{pid}/register", json={"kind": "action", "text": "Book the comms slot", "owner": "Priya"}).json()
     assert item["ref"] == "A-3" and item["meeting"] is None
-    done = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"status": "done", "closed_on": "2026-10-10"}).json()
-    assert done["status"] == "done" and done["closed_on"] == "2026-10-10" and not done["open"]
+    done = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"outcome": "done", "closed_on": "2026-10-10"}).json()
+    assert done["status"] == "closed" and done["outcome"] == "done" and done["closed_on"] == "2026-10-10" and not done["open"]
     reopened = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"status": "open"}).json()
-    assert reopened["open"] and reopened["closed_on"] is None
-    res = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"status": "closed"})
+    assert reopened["open"] and reopened["closed_on"] is None and reopened["outcome"] is None
+    res = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"status": "done"})
     assert res.json()["errors"][0]["code"] == "invalid_status"
+    # Closing needs a reason, and it has to be one an action can have.
+    res = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"status": "closed"})
+    assert res.json()["errors"][0]["code"] == "outcome_required"
+    res = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"outcome": "mitigated"})
+    assert res.json()["errors"][0]["code"] == "outcome_required"
+    dropped = client.patch(f"/api/projects/{pid}/register/{item['id']}", json={"outcome": "dropped", "note": "Comms moved to email"}).json()
+    assert dropped["outcome"] == "dropped"
 
 
 def test_decisions_are_never_edited_only_superseded(client, pid):

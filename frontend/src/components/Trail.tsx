@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { formatDate } from "../state/dates";
 import type { DeliverableTrail, MoveSignal, PreRead, Surprises, TrailCommit } from "../types";
-import { KindTag } from "./RegisterPanel";
+import { KindTag, sentence } from "./RegisterView";
 
 export function SignalTag({ signal }: { signal: MoveSignal | null }) {
   if (!signal) return null;
@@ -61,8 +61,8 @@ export function DeliverableHistory(props: {
     <section className="trail">
       <h3>Why it's here</h3>
       <p className="muted small">
-        Commits, meetings and register items, oldest first. A date move counts as raised beforehand when an open risk or action was on it, or a meeting discussed it in
-        the {trail.recent_days} days before.
+        Commits, meetings and register items, oldest first. A date move counts as raised beforehand when an open risk, issue or action was on it, or a meeting discussed
+        it in the {trail.recent_days} days before.
       </p>
       <ol className="trail-list">
         {trail.entries.map((e, i) => (
@@ -89,6 +89,16 @@ export function DeliverableHistory(props: {
                       “{n}”
                     </p>
                   ))}
+              </>
+            ) : e.type === "register" ? (
+              <>
+                <div className="trail-meta">
+                  <KindTag kind={e.kind}>{e.ref}</KindTag>
+                  <span className="muted">{formatDate(e.date)}</span>
+                  {e.meeting && <span className="muted">{e.meeting.replace(/ \d{4}-\d{2}-\d{2}$/, "")}</span>}
+                </div>
+                <p className="trail-item">{sentence(e.line)}</p>
+                {e.note && <p className="trail-quote">“{e.note}”</p>}
               </>
             ) : (
               <>
@@ -188,6 +198,7 @@ function preReadMarkdown(title: string, p: PreRead): string {
   if (p.coming_up.length) out.push(`## Next ${p.lookahead_days} days`, ...p.coming_up.map((c) => `- ${c.date}: ${c.text}`), "");
   if (p.actions.length)
     out.push("## Open actions", ...p.actions.map((a) => `- ${a.ref} ${a.text}${a.owner ? ` (${a.owner})` : ""}${a.due_on ? `, due ${a.due_on}${a.overdue ? ", overdue" : ""}` : ""}`), "");
+  if (p.issues.length) out.push("## Open issues", ...p.issues.map((r) => `- ${r.ref} ${r.text}${r.owner ? ` (${r.owner})` : ""}`), "");
   if (p.risks.length) out.push("## Open risks", ...p.risks.map((r) => `- ${r.ref} ${r.text}${r.owner ? ` (${r.owner})` : ""}`), "");
   return out.join("\n");
 }
@@ -271,6 +282,19 @@ export function PreReadPanel(props: {
                   </button>{" "}
                   <span className={a.kind === "overdue" ? "overdue-text" : "behind-text"}>{a.status}</span>
                   {a.risks.length > 0 && <span className="muted"> · {a.risks.join(", ")}</span>}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {data.issues.length > 0 && (
+          <>
+            <h4>Open issues</h4>
+            <ul className="plain-list small">
+              {data.issues.map((i) => (
+                <li key={i.ref}>
+                  <KindTag kind="issue">{i.ref}</KindTag> {i.text}
+                  {i.owner && <span className="muted"> · {i.owner}</span>}
                 </li>
               ))}
             </ul>

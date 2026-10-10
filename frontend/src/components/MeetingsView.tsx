@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { formatDate, formatTimestamp } from "../state/dates";
-import { itemsFromNotes, mention, parseLine, parseNotes, setLineTag, TAGS, type ParsedLine } from "../state/notes";
+import { itemsFromNotes, mention, parseLine, parseNotes, setLineTag, TAG_RE, TAGS, type ParsedLine } from "../state/notes";
 import { groupsOf, knownNames, membersOf, mentionAt, suggestPeople } from "../state/people";
 import { appendToNotes, copilotPrompt, importRecap } from "../state/recap";
 import type { MeetingsStore } from "../state/useMeetings";
 import type { Deliverable, ItemKind, Meeting, Person } from "../types";
-import { ItemRow, KindTag, isOverdue } from "./RegisterPanel";
+import { ItemRow, KindTag, isOverdue } from "./RegisterView";
 import { PreReadPanel } from "./Trail";
 
 interface Props {
@@ -28,7 +28,8 @@ interface Props {
   onSelectDeliverable: (id: string) => void;
 }
 
-export function MeetingsPanel(props: Props) {
+/** The Meetings tab beside the plan: the list, or one meeting's notes. */
+export function MeetingsView(props: Props) {
   const meeting = props.store.meetings.find((m) => m.id === props.openId) ?? null;
   return meeting ? <MeetingEditor {...props} meeting={meeting} /> : <MeetingList {...props} />;
 }
@@ -50,59 +51,71 @@ function MeetingList(props: Props) {
       setError((err as Error).message);
     }
   };
+  const inProgress = props.store.meetings.filter((m) => !m.finished_at);
+  const finished = props.store.meetings.filter((m) => m.finished_at);
 
   return (
     <div className="meetings">
-      <form className="meeting-new" onSubmit={create}>
-        <div className="field-row">
-          <label className="field">
-            <span>New meeting</span>
-            <input list="meeting-titles" value={title} placeholder="e.g. Steering committee" onChange={(e) => setTitle(e.target.value)} />
-            <datalist id="meeting-titles">
-              {titles.map((t) => (
-                <option key={t} value={t} />
-              ))}
-            </datalist>
-          </label>
-          <label className="field date">
-            <span>Date</span>
-            <input type="date" value={heldOn} onChange={(e) => setHeldOn(e.target.value)} />
-          </label>
-        </div>
-        <button className="primary small" disabled={!title.trim() || !heldOn}>
-          Start meeting
-        </button>
-        <p className="muted small">A meeting with the same title as an earlier one starts with its attendees.</p>
-      </form>
-      {error && <p className="callout error small">{error}</p>}
-      {props.store.error && <p className="callout error small">{props.store.error}</p>}
+        <form className="meeting-new" onSubmit={create}>
+          <div className="field-row">
+            <label className="field">
+              <span>New meeting</span>
+              <input list="meeting-titles" value={title} placeholder="e.g. Steering committee" onChange={(e) => setTitle(e.target.value)} />
+              <datalist id="meeting-titles">
+                {titles.map((t) => (
+                  <option key={t} value={t} />
+                ))}
+              </datalist>
+            </label>
+            <label className="field date">
+              <span>Date</span>
+              <input type="date" value={heldOn} onChange={(e) => setHeldOn(e.target.value)} />
+            </label>
+          </div>
+          <button className="primary small" disabled={!title.trim() || !heldOn}>
+            Start meeting
+          </button>
+          <p className="muted small">A meeting with the same title as an earlier one starts with its attendees. Actions, risks, issues and decisions go to the register when it finishes.</p>
+        </form>
+        {error && <p className="callout error small">{error}</p>}
+        {props.store.error && <p className="callout error small">{props.store.error}</p>}
 
-      {props.store.meetings.length === 0 ? (
-        <p className="hint">No meetings yet. Start one to take notes beside the plan.</p>
-      ) : (
-        <ul className="meeting-list">
-          {props.store.meetings.map((m) => (
-            <li key={m.id}>
-              <button className="meeting-row" onClick={() => props.onOpen(m.id)}>
-                <span className="meeting-title">{m.title}</span>
-                <span className="muted small">
-                  {formatDate(m.held_on)} {m.held_on.slice(0, 4)}
-                </span>
-                <span className="meeting-sub small">
-                  {m.finished_at ? (
-                    <>
-                      {m.items.length} item{m.items.length === 1 ? "" : "s"}
-                      {m.commit_seq !== null && <> · plan commit #{m.commit_seq}</>}
-                    </>
-                  ) : (
-                    <span className="in-progress">In progress</span>
-                  )}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+        {props.store.meetings.length === 0 && <p className="hint">No meetings yet. Start one to take notes beside the plan.</p>}
+        {[
+          ["In progress", inProgress],
+          ["Finished", finished],
+        ].map(([label, list]) =>
+          (list as Meeting[]).length === 0 ? null : (
+            <section key={label as string}>
+              <h4>{label as string}</h4>
+              <ul className="meeting-list">
+                {(list as Meeting[]).map((m) => (
+                  <li key={m.id}>
+                    <button className="meeting-row" onClick={() => props.onOpen(m.id)}>
+                      <span className="meeting-title">{m.title}</span>
+                      <span className="muted">
+                        {formatDate(m.held_on)} {m.held_on.slice(0, 4)}
+                      </span>
+                      <span className="meeting-sub small">
+                        {m.attendees.filter((a) => a.present).length} attending
+                        {m.finished_at ? (
+                          <>
+                            {" "}· {m.items.length} item{m.items.length === 1 ? "" : "s"}
+                            {m.commit_seq !== null && <> · plan commit #{m.commit_seq}</>}
+                          </>
+                        ) : (
+                          <>
+                            {" "}· <span className="in-progress">In progress</span>
+                          </>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ),
+        )}
     </div>
   );
 }
@@ -169,7 +182,7 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
   const markDone = async (itemId: number) => {
     setError(null);
     try {
-      await store.updateItem(itemId, { status: "done", closed_on: meeting.held_on });
+      await store.updateItem(itemId, { outcome: "done", closed_on: meeting.held_on, meeting_id: meeting.id });
     } catch (e) {
       setError(e instanceof ApiError && e.errors.length ? e.errors.map((x) => x.message).join(" ") : (e as Error).message);
     }
@@ -187,217 +200,229 @@ function MeetingEditor(props: Props & { meeting: Meeting }) {
         <button className="link small" onClick={() => (void store.flush(), props.onOpen(null))}>
           ← All meetings
         </button>
+        {finished ? <span className="finished-chip small">Finished {formatTimestamp(meeting.finished_at!)}</span> : <span className="in-progress small">In progress</span>}
         <span className={`save-state small ${store.saveState}`}>
           {store.saveState === "saving" ? "Saving…" : store.saveState === "failed" ? "Not saved. Retrying on next edit" : "Saved"}
         </span>
-      </div>
-
-      <div className="field-row">
-        <label className="field">
-          <span>Meeting</span>
-          <input value={meeting.title} disabled={finished} onChange={(e) => store.edit(meeting.id, { title: e.target.value })} />
-        </label>
-        <label className="field date">
-          <span>Date</span>
-          <input type="date" value={meeting.held_on} disabled={finished} onChange={(e) => e.target.value && store.edit(meeting.id, { held_on: e.target.value })} />
-        </label>
-      </div>
-
-      {!finished && (
-        <PreReadPanel
-          projectId={props.projectId}
-          meetingId={meeting.id}
-          title={meeting.title}
-          refreshKey={`${props.refreshKey}|${meeting.held_on}|${meeting.title}`}
-          onViewCommit={props.onViewCommit}
-          onSelectDeliverable={props.onSelectDeliverable}
-        />
-      )}
-
-      <section className="meeting-section">
-        <h3>
-          Attendees <span className="muted small">click to mark absent</span>
-        </h3>
-        <div className="attendees">
-          {meeting.attendees.map((a) => (
-            <span key={a.name} className={`attendee ${a.present ? "" : "absent"}`}>
-              <button
-                className="attendee-name"
-                title={a.present ? "Present. Click to mark absent" : "Absent. Click to mark present"}
-                onClick={() => setAttendees(meeting.attendees.map((x) => (x.name === a.name ? { ...x, present: !x.present } : x)))}
-              >
-                {a.name}
-              </button>
-              <button className="attendee-x" aria-label={`Remove ${a.name}`} onClick={() => setAttendees(meeting.attendees.filter((x) => x.name !== a.name))}>
-                ×
-              </button>
-            </span>
-          ))}
-          <form onSubmit={addAttendee} className="attendee-add">
-            <input value={newName} placeholder="Add name" aria-label="Add attendee" list="meeting-people" onChange={(e) => setNewName(e.target.value)} />
-            <datalist id="meeting-people">
-              {people
-                .filter((p) => !attending(p.name))
-                .map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.group ?? ""}
-                  </option>
-                ))}
-              {groupsToAdd.map((g) => (
-                <option key={`group:${g}`} value={g}>
-                  group: {membersOf(people, g).join(", ")}
-                </option>
-              ))}
-            </datalist>
-          </form>
-          {groupsToAdd.map((g) => (
-            <button key={g} className="attendee group-add small" title={`Add ${membersOf(people, g).filter((n) => !attending(n)).join(", ")}`} onClick={() => addAttendees(membersOf(people, g))}>
-              + {g}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {!finished && carried.length > 0 && (
-        <section className="meeting-section">
-          <h3>Open actions</h3>
-          <ul className="carried">
-            {carried.map((i) => (
-              <li key={i.id} className={isOverdue(i, meeting.held_on) ? "overdue" : ""}>
-                <button className="small done-btn" onClick={() => markDone(i.id)} title={`Mark ${i.ref} done on ${formatDate(meeting.held_on)}`}>
-                  Done
-                </button>
-                <KindTag kind="action">{i.ref}</KindTag>
-                <span className="carried-text">
-                  {i.text}
-                  <span className="muted small">
-                    {i.owner && ` · ${i.owner}`}
-                    {i.due_on && ` · due ${formatDate(i.due_on)}`}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {error && <p className="callout error small">{error}</p>}
-
-      <section className="meeting-section">
-        <div className="section-head">
-          <h3>Notes</h3>
-          {!finished && (
-            <button className="small secondary" aria-expanded={importing} onClick={() => setImporting((v) => !v)}>
-              {importing ? "Close import" : "Import recap"}
-            </button>
-          )}
-        </div>
-        {importing && (
-          <RecapImport
-            deliverables={props.deliverables}
-            people={knownNames(people, meeting.attendees.map((a) => a.name))}
-            roster={people}
-            meetingDate={meeting.held_on}
-            onAdd={(added) => {
-              setNotes(appendToNotes(meeting.notes, added));
-              setImporting(false);
-            }}
-          />
-        )}
-        <MentionTextarea
-          textareaRef={notesRef}
-          className="notes-input"
-          rows={12}
-          value={meeting.notes}
-          people={people}
-          spellCheck
-          placeholder={"One point per line. Start a line with !action, ?risk or =decision.\nClick a bar on the timeline to mention it. Type @ to tag someone."}
-          onChange={setNotes}
-          onBlur={() => void store.flush()}
-        />
+        <span className="spacer" />
         {!finished && (
-          <div className="notes-hints small">
-            <span className="muted">Tag the current line:</span>
-            {(Object.keys(TAGS) as ItemKind[]).map((k) => (
-              <button key={k} type="button" className={`tag-btn ${k}`} onMouseDown={(e) => e.preventDefault()} onClick={() => tagCurrentLine(k)}>
-                {TAGS[k]}
-              </button>
-            ))}
-            <span className="muted">
-              <code>@Ravi</code> or a group assigns · <code>by Fri</code> sets a due date
-            </span>
-          </div>
-        )}
-        {finished && <p className="muted small">Notes stay editable. The items below were recorded when the meeting finished and don't change with the notes.</p>}
-      </section>
-
-      {finished ? (
-        <section className="meeting-section">
-          <h3>Recorded {formatTimestamp(meeting.finished_at!)}</h3>
-          {meeting.commit_seq !== null ? (
-            <button className="link small" onClick={() => props.onViewCommit(meeting.commit_seq!)}>
-              Plan commit #{meeting.commit_seq} · {meeting.reference}
-            </button>
-          ) : (
-            <p className="muted small">No plan changes.</p>
-          )}
-          {meeting.items.length === 0 ? (
-            <p className="muted small">No actions, risks or decisions.</p>
-          ) : (
-            <ul className="reg-list">
-              {meeting.items.map((i) => (
-                <ItemRow key={i.id} item={i} deliverables={byId} today={props.today} showMeeting={false} onSelectDeliverable={props.onSelectDeliverable} />
-              ))}
-            </ul>
-          )}
-        </section>
-      ) : (
-        <>
-          <section className="meeting-section">
-            <h3>
-              Picked up from the notes <span className="muted small">{items.length}</span>
-            </h3>
-            {items.length === 0 ? (
-              <p className="muted small">Lines starting with !action, ?risk or =decision appear here.</p>
-            ) : (
-              <ul className="picked">
-                {lines
-                  .filter((l) => l.kind && l.text)
-                  .map((l) => (
-                    <PickedLine key={l.index} line={l} onTag={(k) => setNotes(setLineTag(meeting.notes, l.index, k))} onSelectDeliverable={props.onSelectDeliverable} />
-                  ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="meeting-section">
-            <h3>Plan changes</h3>
-            {props.stagedCount > 0 ? (
-              <p className="small">
-                {props.stagedCount} staged change{props.stagedCount === 1 ? "" : "s"} can be committed with this meeting.{" "}
-                <button className="link" onClick={props.onReviewChanges}>
-                  Review
-                </button>
-              </p>
-            ) : (
-              <p className="muted small">None staged. Drag bars on the timeline to stage the changes agreed here.</p>
-            )}
-          </section>
-
-          <div className="meeting-actions">
+          <>
             <button className="danger small" onClick={remove}>
               Delete
             </button>
-            <button className="primary" onClick={async () => (await store.flush(), props.onFinish(meeting))}>
+            <button className="primary small" onClick={async () => (await store.flush(), props.onFinish(meeting))}>
               Finish meeting…
             </button>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
+      <div className="meeting-heading">
+        <input className="meeting-title-input" value={meeting.title} disabled={finished} aria-label="Meeting title" onChange={(e) => store.edit(meeting.id, { title: e.target.value })} />
+        <input type="date" value={meeting.held_on} disabled={finished} aria-label="Meeting date" onChange={(e) => e.target.value && store.edit(meeting.id, { held_on: e.target.value })} />
+      </div>
+
+      {/* Stacked in a narrow panel; three columns (context | notes | people) once it's wide. */}
+      <div className="meeting-body">
+          <aside className="meeting-area context-area">
+            {finished ? (
+              <section className="meeting-section">
+                <h3>Recorded</h3>
+                {meeting.commit_seq !== null ? (
+                  <button className="link small" onClick={() => props.onViewCommit(meeting.commit_seq!)}>
+                    Plan commit #{meeting.commit_seq} · {meeting.reference}
+                  </button>
+                ) : (
+                  <p className="muted small">No plan changes.</p>
+                )}
+                {meeting.items.length === 0 ? (
+                  <p className="muted small">No actions, risks, issues or decisions.</p>
+                ) : (
+                  <ul className="reg-list">
+                    {meeting.items.map((i) => (
+                      <ItemRow key={i.id} item={i} deliverables={byId} today={props.today} showMeeting={false} onSelectDeliverable={props.onSelectDeliverable} />
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ) : (
+              <PreReadPanel
+                projectId={props.projectId}
+                meetingId={meeting.id}
+                title={meeting.title}
+                refreshKey={`${props.refreshKey}|${meeting.held_on}|${meeting.title}`}
+                onViewCommit={props.onViewCommit}
+                onSelectDeliverable={props.onSelectDeliverable}
+              />
+            )}
+
+            {!finished && carried.length > 0 && (
+              <section className="meeting-section">
+                <h3>
+                  Open actions <span className="muted small">{carried.length}</span>
+                </h3>
+                <ul className="carried">
+                  {carried.map((i) => (
+                    <li key={i.id} className={isOverdue(i, meeting.held_on) ? "overdue" : ""}>
+                      <button className="small done-btn" onClick={() => markDone(i.id)} title={`Mark ${i.ref} done on ${formatDate(meeting.held_on)}`}>
+                        Done
+                      </button>
+                      <KindTag kind="action">{i.ref}</KindTag>
+                      <span className="carried-text">
+                        {i.text}
+                        <span className="muted small">
+                          {i.owner && ` · ${i.owner}`}
+                          {i.due_on && ` · due ${formatDate(i.due_on)}`}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {error && <p className="callout error small">{error}</p>}
+          </aside>
+
+          <section className="meeting-area notes-area">
+            <div className="section-head">
+              <h3>Notes</h3>
+              {!finished && (
+                <button className="small secondary" aria-expanded={importing} onClick={() => setImporting((v) => !v)}>
+                  {importing ? "Close import" : "Import recap"}
+                </button>
+              )}
+            </div>
+            {importing && (
+              <RecapImport
+                deliverables={props.deliverables}
+                people={knownNames(people, meeting.attendees.map((a) => a.name))}
+                roster={people}
+                meetingDate={meeting.held_on}
+                onAdd={(added) => {
+                  setNotes(appendToNotes(meeting.notes, added));
+                  setImporting(false);
+                }}
+              />
+            )}
+            <div className="notes-wrap">
+              <MentionTextarea
+                textareaRef={notesRef}
+                className="notes-input"
+                value={meeting.notes}
+                people={people}
+                spellCheck
+                placeholder={"One point per line. Start a line with !action, ?risk, !issue or =decision.\nClick a bar on the plan to mention it. Type @ to tag someone or a group."}
+                onChange={setNotes}
+                onBlur={() => void store.flush()}
+              />
+            </div>
+            {!finished ? (
+              <div className="notes-hints small">
+                <span className="muted">Tag the current line:</span>
+                {(Object.keys(TAGS) as ItemKind[]).map((k) => (
+                  <button key={k} type="button" className={`tag-btn ${k}`} onMouseDown={(e) => e.preventDefault()} onClick={() => tagCurrentLine(k)}>
+                    {TAGS[k]}
+                  </button>
+                ))}
+                <span className="muted">
+                  <code>@Ravi</code> or a group assigns · <code>by Fri</code> sets a due date
+                </span>
+              </div>
+            ) : (
+              <p className="muted small">Notes stay editable. The items under Recorded were captured when the meeting finished and don't change with the notes.</p>
+            )}
+          </section>
+
+          <section className="meeting-area people-area meeting-section">
+              <h3>
+                Participants{" "}
+                <span className="muted small">
+                  {meeting.attendees.filter((a) => a.present).length} of {meeting.attendees.length} here
+                </span>
+              </h3>
+              <p className="participants" title="Click a name to mark them absent or present. Hover a name to remove it.">
+                {meeting.attendees.length === 0 && <span className="muted">No one yet. </span>}
+                {meeting.attendees.map((a, i) => (
+                  <span key={a.name} className={`participant ${a.present ? "" : "absent"}`}>
+                    <button
+                      className="participant-name"
+                      title={a.present ? "Present. Click to mark absent" : "Absent. Click to mark present"}
+                      onClick={() => setAttendees(meeting.attendees.map((x) => (x.name === a.name ? { ...x, present: !x.present } : x)))}
+                    >
+                      {a.name}
+                    </button>
+                    <button className="participant-x" aria-label={`Remove ${a.name}`} title={`Remove ${a.name}`} onClick={() => setAttendees(meeting.attendees.filter((x) => x.name !== a.name))}>
+                      ×
+                    </button>
+                    {i < meeting.attendees.length - 1 && <span className="participant-sep">, </span>}
+                  </span>
+                ))}
+              </p>
+              <div className="participants-add">
+                <form onSubmit={addAttendee}>
+                  <input className="small" value={newName} placeholder="+ name or group" aria-label="Add participant" list="meeting-people" onChange={(e) => setNewName(e.target.value)} />
+                  <datalist id="meeting-people">
+                    {people
+                      .filter((p) => !attending(p.name))
+                      .map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.groups.join(", ")}
+                        </option>
+                      ))}
+                    {groupsToAdd.map((g) => (
+                      <option key={`group:${g}`} value={g}>
+                        group: {membersOf(people, g).join(", ")}
+                      </option>
+                    ))}
+                  </datalist>
+                </form>
+                {groupsToAdd.map((g) => (
+                  <button key={g} className="link small" title={`Add ${membersOf(people, g).filter((n) => !attending(n)).join(", ")}`} onClick={() => addAttendees(membersOf(people, g))}>
+                    + {g}
+                  </button>
+                ))}
+              </div>
+          </section>
+
+          {!finished && (
+            <div className="meeting-area picked-area">
+                <section className="meeting-section">
+                  <h3>
+                    Picked up from the notes <span className="muted small">{items.length}</span>
+                  </h3>
+                  {items.length === 0 ? (
+                    <p className="muted small">Lines starting with !action, ?risk, !issue or =decision appear here.</p>
+                  ) : (
+                    <ul className="picked">
+                      {lines
+                        .filter((l) => l.kind && l.text)
+                        .map((l) => (
+                          <PickedLine key={l.index} line={l} onTag={(k) => setNotes(setLineTag(meeting.notes, l.index, k))} onSelectDeliverable={props.onSelectDeliverable} />
+                        ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="meeting-section">
+                  <h3>Plan changes</h3>
+                  {props.stagedCount > 0 ? (
+                    <p className="small">
+                      {props.stagedCount} staged change{props.stagedCount === 1 ? "" : "s"} can be committed with this meeting.{" "}
+                      <button className="link" onClick={props.onReviewChanges}>
+                        Review
+                      </button>
+                    </p>
+                  ) : (
+                    <p className="muted small">None staged. Drag bars on the plan, or right-click one, to stage the changes agreed here.</p>
+                  )}
+                </section>
+            </div>
+          )}
+      </div>
     </div>
   );
 }
 
-const NEXT: Record<ItemKind, ItemKind | null> = { action: "risk", risk: "decision", decision: null };
+const NEXT: Record<ItemKind, ItemKind | null> = { action: "risk", risk: "issue", issue: "decision", decision: null };
 
 function PickedLine(props: { line: ParsedLine; onTag: (kind: ItemKind | null) => void; onSelectDeliverable: (id: string) => void }) {
   const l = props.line;
@@ -444,7 +469,7 @@ function RecapImport(props: {
   const [copied, setCopied] = useState<string | null>(null);
   const lines = useMemo(() => importRecap(text, props.deliverables, props.people), [text, props.deliverables, props.people]);
   const prompt = useMemo(() => copilotPrompt(props.deliverables, props.people), [props.deliverables, props.people]);
-  const tagged = lines.filter((l) => /^(!action|\?risk|=decision)\b/i.test(l.line)).length;
+  const tagged = lines.filter((l) => TAG_RE.test(l.line)).length;
 
   const copy = async () => {
     try {

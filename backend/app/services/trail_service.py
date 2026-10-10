@@ -3,8 +3,8 @@ and whether each move was raised before it was committed.
 
 A commit that moves dates is one of:
   agreed     - committed from a meeting (the meeting's own plan commit)
-  foreseen   - an open risk or action was on a moved deliverable, or a meeting discussed one
-               of them in the RECENT_DAYS before
+  foreseen   - an open risk, issue or action was on a moved deliverable, or a meeting discussed
+               one of them in the RECENT_DAYS before
   surprise   - neither: nobody raised it before the plan changed
 """
 
@@ -18,10 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..domain.events import Event, State
-from ..domain.meetings import STATUSES, item_ref
+from ..domain.meetings import item_ref
 from ..domain.models import Commit, Meeting, RegisterItem
 from ..domain.validators import PROGRESS_CATEGORY
-from . import history_service, version_service
+from . import history_service, meeting_service, version_service
 from .commit_service import require_project
 from .knowledge_service import describe_events
 
@@ -65,6 +65,9 @@ class Trail:
         seq_of = dict(session.execute(select(Commit.id, Commit.seq_no).where(Commit.project_id == project_id)).all())
         self.meeting_of_commit = {seq_of[m.commit_id]: m for m in self.meetings if m.commit_id}
         self.meeting_by_id = {m.id: m for m in self.meetings}
+        self.item_events: dict[int, list[dict[str, Any]]] = {}
+        for e in meeting_service.register_history(session, project_id):
+            self.item_events.setdefault(e["item_id"], []).append(e)
 
     def name(self, did: str, seq: int | None = None) -> str:
         for state in ([self.states[seq]] if seq is not None else []) + [self.states[self.version]] + list(reversed(list(self.states.values()))):
@@ -76,16 +79,26 @@ class Trail:
         m = self.meeting_by_id.get(item.meeting_id) if item.meeting_id else None
         return m.held_on if m else _day(item.created_at)
 
+    def open_on(self, item: RegisterItem, day: str) -> bool:
+        """Whether an item was open on `day`, read from its history. It counts as open on the day it closed."""
+        if self._item_raised(item) > day:
+            return False
+        is_open = True
+        for e in sorted(self.item_events.get(item.id, []), key=lambda e: e["on"]):
+            if e["type"] == "closed" and e["on"] < day:
+                is_open = False
+            elif e["type"] == "reopened" and e["on"] <= day:
+                is_open = True
+        return is_open
+
     def signals_before(self, did: str, day: str) -> list[dict[str, Any]]:
-        """What had raised deliverable `did` by `day`: open risks and actions on it, recent meetings that discussed it."""
+        """What had raised deliverable `did` by `day`: open risks, issues and actions on it, recent meetings that discussed it."""
         out = []
         for i in self.items:
             if i.kind == "decision" or did not in (i.deliverable_ids or []):
                 continue
-            raised = self._item_raised(i)
-            still_open = i.status == STATUSES[i.kind][0] or (i.closed_on or "9999") >= day
-            if raised <= day and still_open:
-                out.append({"type": "item", "ref": item_ref(i.kind, i.number), "date": raised})
+            if self.open_on(i, day):
+                out.append({"type": "item", "ref": item_ref(i.kind, i.number), "date": self._item_raised(i)})
         since = (date.fromisoformat(day) - timedelta(days=RECENT_DAYS)).isoformat()
         name = self.name(did)
         for m in self.meetings:
@@ -172,8 +185,14 @@ def deliverable_trail(session: Session, project_id: str, deliverable_id: str) ->
     for i in trail.items:
         if i.meeting_id is None and deliverable_id in (i.deliverable_ids or []):
             entries.append({"type": "item", "date": _day(i.created_at), "items": [{"ref": item_ref(i.kind, i.number), "kind": i.kind, "text": i.text}]})
+        if deliverable_id not in (i.deliverable_ids or []):
+            continue
+        for e in trail.item_events.get(i.id, []):
+            if e["type"] != "raised":
+                meeting = f"{e['meeting']['title']} {e['meeting']['held_on']}" if e["meeting"] else None
+                entries.append({"type": "register", "date": e["on"], "ref": e["ref"], "kind": i.kind, "line": e["line"], "note": e["note"], "meeting": meeting})
     # Same day: meetings first, so a commit agreed at a meeting follows it.
-    order = {"meeting": 0, "item": 1, "commit": 2}
+    order = {"meeting": 0, "item": 1, "register": 2, "commit": 3}
     entries.sort(key=lambda e: (e["date"], order[e["type"]], e.get("seq", 0)))
     return {"deliverable_id": deliverable_id, "name": name, "recent_days": RECENT_DAYS, "entries": entries}
 
@@ -247,6 +266,7 @@ def preread(session: Session, project_id: str, meeting_id: int) -> dict[str, Any
     others = [i for i in trail.items if i.meeting_id != meeting.id]
     actions = sorted((item_dict(i) for i in others if i.kind == "action" and i.status == "open"), key=lambda a: (not a["overdue"], a["due_on"] or "9999"))
     risks = [item_dict(i) for i in others if i.kind == "risk" and i.status == "open"]
+    issues = [item_dict(i) for i in others if i.kind == "issue" and i.status == "open"]
     decisions = [item_dict(i) for i in others if i.kind == "decision" and previous and trail._item_raised(i) > previous.held_on]
 
     agenda = []
@@ -262,6 +282,8 @@ def preread(session: Session, project_id: str, meeting_id: int) -> dict[str, Any
     for x in coming:
         if x["text"].endswith(" due"):
             agenda.append(f"{x['text'][:-4]} is due {x['date']}: on track?")
+    if issues:
+        agenda.append(f"Open issues: {', '.join(i['ref'] for i in issues)}")
     covered = {r for a in attention for r in a["risks"]}
     rest = [r["ref"] for r in risks if r["ref"] not in covered]
     if rest:
@@ -278,6 +300,7 @@ def preread(session: Session, project_id: str, meeting_id: int) -> dict[str, Any
         "lookahead_days": LOOKAHEAD_DAYS,
         "actions": actions,
         "risks": risks,
+        "issues": issues,
         "decisions": decisions,
         "agenda": agenda,
     }

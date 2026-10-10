@@ -1,9 +1,9 @@
 // Turning a meeting recap (e.g. from Copilot in Teams) into notes markup, without AI.
-// Lines are tagged from the recap's own headings ("Follow-up tasks", "Decisions", "Risks")
+// Lines are tagged from the recap's own headings ("Follow-up tasks", "Decisions", "Risks", "Issues")
 // and a few plain keywords; deliverable and people names are matched exactly.
 
 import type { Deliverable } from "../types";
-import { mention, TAGS } from "./notes";
+import { mention, TAG_RE, TAGS } from "./notes";
 
 export interface RecapLine {
   /** The line in notes markup, ready to append. */
@@ -13,29 +13,30 @@ export interface RecapLine {
 }
 
 const BULLET_RE = /^(?:[-*•‣◦]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/;
-const TAGGED_RE = /^(!action|\?risk|=decision)\b/i;
 const DECIDED_RE = /\b(agreed|decided|approved)\b/i;
 
 const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const firstName = (name: string) => name.trim().split(/\s+/)[0];
 
-type Section = "action" | "risk" | "decision" | null;
+type Section = "action" | "risk" | "issue" | "decision" | null;
 
 function sectionOf(heading: string): Section {
   if (/follow|action|task|next step|to.?do/i.test(heading)) return "action";
   if (/decision|agreed/i.test(heading)) return "decision";
-  if (/risk|issue|concern|blocker/i.test(heading)) return "risk";
+  // "Risks and issues" stays risks, as before; a heading of only issues or blockers is issues.
+  if (/risk|concern/i.test(heading)) return "risk";
+  if (/issue|blocker|problem/i.test(heading)) return "issue";
   return null;
 }
 
-const SECTION_WORDS = /follow|action|task|next step|to.?do|decision|risk|issue|concern|blocker|notes|summary|discussion|recap|topics|agenda/i;
+const SECTION_WORDS = /follow|action|task|next step|to.?do|decision|risk|issue|concern|blocker|problem|notes|summary|discussion|recap|topics|agenda/i;
 
 /**
  * A heading: "## Notes", "**Decisions**", "Follow-up tasks:", or a short line naming a known section.
  * Other short lines stay notes, so nothing the recap says is dropped.
  */
 function headingText(line: string): string | null {
-  if (BULLET_RE.test(line) || TAGGED_RE.test(line)) return null;
+  if (BULLET_RE.test(line) || TAG_RE.test(line)) return null;
   const bare = line.replace(/^#+\s*/, "").replace(/\*\*|__/g, "").replace(/:\s*$/, "").trim();
   if (!bare || bare.length >= 60) return null;
   const marked = /^#/.test(line) || /^(\*\*|__).+(\*\*|__):?$/.test(line) || /:\s*$/.test(line);
@@ -81,7 +82,7 @@ export function importRecap(text: string, deliverables: Deliverable[], people: s
       continue;
     }
     const body = linkDeliverables(line.replace(BULLET_RE, "").replace(/\*\*|__/g, ""), deliverables);
-    if (TAGGED_RE.test(body)) {
+    if (TAG_RE.test(body)) {
       out.push({ line: body, why: "already tagged" });
       continue;
     }
@@ -110,7 +111,7 @@ export function copilotPrompt(deliverables: Deliverable[], people: string[]): st
   const names = people.map(firstName).filter(Boolean);
   return [
     "Summarise this meeting for Backstroke. Output plain text with one item per line and no headings, bullets or numbering.",
-    "- Start an action with !action, a risk with ?risk and a decision with =decision. Every other line is a note.",
+    "- Start an action with !action, a risk (might go wrong) with ?risk, an issue (already going wrong) with !issue and a decision with =decision. Every other line is a note.",
     names.length
       ? `- Put the owner straight after the tag as @Name. Use only these names: ${names.join(", ")}.`
       : "- Put the owner straight after the tag as @Name, using their first name.",

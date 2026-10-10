@@ -4,7 +4,6 @@ import { addDays, daysBetween, formatDate } from "../state/dates";
 import { DEFAULT_WORKFLOW, addPhase, hasPhases, minDuration, moveEnd, moveStart, phaseSpans, refitPhases, removePhase, renamePhase, splitIntoPhases } from "../state/phases";
 import { newId } from "../state/staging";
 import { deliverableStatus, phaseStatuses, spanStatus, statusLabel, type Status } from "../state/status";
-import { LANE_COLORS } from "../timeline/TimelineCanvas";
 
 interface Props {
   state: PlanState;
@@ -15,7 +14,6 @@ interface Props {
   onStage: (change: Change) => void;
   onRevert: (id: string) => void;
   onSelect: (id: string | null) => void;
-  onAddDeliverable: (workstreamId: string) => void;
   /** Status is judged as of this day. */
   asOf: string;
   /** Mark a deliverable (phase null) or one of its phases done, or reopen it (finishedOn null). */
@@ -416,82 +414,8 @@ function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
   );
 }
 
-function PlanInspector({ props }: { props: Props }) {
-  const { state, editable, onStage } = props;
-  const [newLane, setNewLane] = useState("");
-  const lanes = state.workstreams;
-
-  const addLane = () => {
-    if (!newLane.trim()) return;
-    onStage({ entity_type: "workstream", entity_id: newId("workstream"), operation: "create", fields: { name: newLane.trim() } });
-    setNewLane("");
-  };
-
-  const swap = (i: number, j: number) => {
-    const a = lanes[i];
-    const b = lanes[j];
-    onStage({ entity_type: "workstream", entity_id: a.id, operation: "update", fields: { order_index: b.order_index } });
-    onStage({ entity_type: "workstream", entity_id: b.id, operation: "update", fields: { order_index: a.order_index } });
-  };
-
-  return (
-    <div className="inspector">
-      <p className="hint">
-        {editable ? (
-          <>
-            Drag a bar to move it, drag its edges to change dates, or double-click a lane to add a deliverable. Edits are <b>staged</b> until you commit them with a reason.
-          </>
-        ) : (
-          <>You are viewing a historical version. It is read-only.</>
-        )}
-      </p>
-      <h4>Workstreams</h4>
-      <ul className="lane-list">
-        {lanes.map((w, i) => {
-          const count = state.deliverables.filter((d) => d.workstream_id === w.id).length;
-          return (
-            <li key={w.id} style={{ ["--lane-color" as string]: LANE_COLORS[i % LANE_COLORS.length] }}>
-              <span className="lane-swatch" />
-              <CommitOnBlurInput value={w.name} disabled={!editable} onCommit={(name) => onStage({ entity_type: "workstream", entity_id: w.id, operation: "update", fields: { name } })} aria-label="Workstream name" />
-              <span className="muted count">{count}</span>
-              {editable && (
-                <span className="lane-actions">
-                  <button className="icon" title="Move up" disabled={i === 0} onClick={() => swap(i, i - 1)}>
-                    ↑
-                  </button>
-                  <button className="icon" title="Move down" disabled={i === lanes.length - 1} onClick={() => swap(i, i + 1)}>
-                    ↓
-                  </button>
-                  <button className="icon" title="Add deliverable" onClick={() => props.onAddDeliverable(w.id)}>
-                    +
-                  </button>
-                  <button
-                    className="icon"
-                    title={count ? "Move or delete its deliverables first" : "Delete workstream"}
-                    disabled={count > 0}
-                    onClick={() => onStage({ entity_type: "workstream", entity_id: w.id, operation: "delete", fields: {} })}
-                  >
-                    ×
-                  </button>
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      {editable && (
-        <div className="inline-form">
-          <input placeholder="New workstream name" value={newLane} onChange={(e) => setNewLane(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addLane()} />
-          <button onClick={addLane} disabled={!newLane.trim()}>
-            Add
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function InspectorPanel(props: Props) {
+/** Everything about one deliverable: fields, progress, phases and dependencies. */
+export function DeliverableDetails(props: Props) {
   const d = props.selectedId ? props.state.deliverables.find((x) => x.id === props.selectedId) : undefined;
-  return d ? <DeliverableInspector key={d.id} d={d} props={props} /> : <PlanInspector props={props} />;
+  return d ? <DeliverableInspector key={d.id} d={d} props={props} /> : <p className="muted small">This deliverable isn't in the version on screen.</p>;
 }
