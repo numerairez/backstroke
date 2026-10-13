@@ -42,12 +42,26 @@ Reset the demo data with `cd backend && .venv/bin/python -m app.seed --reset`.
 
 ## Layout
 
-The top bar switches between three views, and Meetings lives beside the plan:
+## Sign-in
+
+Everyone signs in with an email and password. The first person to open a fresh install sets it up: their account is the **admin**, and they're added to People if they aren't listed yet. After that, only someone an admin has listed in **Settings → People** can register, using their name as listed there.
+
+- **Admins** change Settings (people, groups, projects), see every project, make others admins, and **Reset** someone's sign-in (signing them out so they can register again, e.g. after a forgotten password). Removing someone from People removes their sign-in too.
+- **Everyone else** sees only the projects their groups work on (others answer 404), and Settings read-only.
+- Commits, meetings and register changes are recorded under the signed-in person; an `author` in a request is ignored.
+
+Passwords are hashed with scrypt; a session is a random token in an HttpOnly, SameSite=Lax cookie (Secure over HTTPS), kept for 30 days, with only its SHA-256 stored. There's no email verification, password-reset email or rate limiting yet.
+
+A **project** is a plan of swimlanes, its meetings and its register. People belong to the organisation, not to a project:
+
+- **Left sidebar**: **Your projects** (the ones your groups work on); admins also get **Other projects**, folded away. **+** (admins) opens the new-project form in Settings. Your account and **Sign out** are at the bottom. **«** collapses the sidebar to project initials.
+- **Settings** (bottom of the sidebar): **People** lists everyone once with their groups (and, read-only, the projects those put them on); **Projects** renames a project, describes it, and chooses the groups working on it. Everyone in those groups is a member: offered as an attendee and owner there, and shown the project in their sidebar.
+
+Inside a project the top bar switches between two views, and Meetings lives beside the plan:
 
 - **Plan**: the timeline, with a side panel whose icon tabs are **Changes** (staged edits and commit; a badge counts them), **Meetings** (a dot while one is in progress), **History** (commits, or compare two versions) and **Insights** (metrics and the surprise index). Hover an icon for its name. Hide the panel with **»** to give the timeline the full width.
 - **Meetings** (in the Plan's side panel): the meeting list, or one meeting's participants (one line of names, click to mark absent), notes, picked-up items, pre-read and open actions. Opening a meeting widens the panel to at least 640px; widen it further and the meeting shows as three columns (pre-read | notes | participants). Clicking a bar mentions it in the notes.
-- **Register**: actions, risks, issues and decisions as one table, filtered by type, owner (a person or a group) and text. Nothing is ever deleted: **Close…** asks why (an action is done or dropped; a risk mitigated, passed, accepted or happened; an issue resolved or accepted), and **Open only** hides what's closed. A risk that happened becomes an issue, either a new one carrying over its text, owner and deliverables or one already raised. Click an item's ref for its history: every edit, closure and reopening, with who, the meeting it happened in, and why. Write an issue in meeting notes as `!issue`.
-- **People**: the project's people and groups. Someone can be in any number of groups, and `@Group` in notes or as an owner means everyone in it.
+- **Register**: actions, risks, issues and decisions as one table, filtered by type, owner (a person or a group) and text. Nothing is ever deleted: **Close…** asks why (an action is done or dropped; a risk mitigated, passed, accepted or happened; an issue resolved or accepted; a decision superseded by a newer one or withdrawn), and **Open only** hides what's closed. A risk that happened becomes an issue, either a new one carrying over its text, owner and deliverables or one already raised. Click an item's ref for its history: every edit, closure and reopening, with who, the meeting it happened in, and why. Write an issue in meeting notes as `!issue`.
 
 Edit the plan from the timeline itself:
 
@@ -124,7 +138,12 @@ frontend/src/
 | `GET /api/projects/{id}/diff?from=&to=` | Field-level diff of two versions |
 | `GET/POST /api/projects/{id}/baselines` | Named pointers to commits |
 | `GET /api/projects/{id}/metrics[?baseline=]` | Churn, net movement, recovery, reason attribution, propagation |
-| `GET/PUT /api/projects/{id}/people` | The project's people and groups (`{people: [{name, groups}], groups}`), saved whole |
+| `GET /api/auth/me`, `POST /api/auth/register`, `/login`, `/logout` | Sign-in; register and login set the session cookie. Every other route needs it (401 without) |
+| `GET /api/auth/accounts`, `PATCH`/`DELETE /api/auth/accounts/{id}` | Admins: list sign-ins, grant or take admin, reset one |
+| `GET/PUT /api/people` | Everyone in the organisation (`{people: [{name, groups, projects}], groups, projects_by_group}`), saved whole; `projects` is derived from groups; leave out `projects_by_group` and each group keeps its projects |
+| `GET /api/projects/{id}/people` | The project's members and the groups they're in (`{people: [{name, groups}], groups}`) |
+| `PUT /api/projects/{id}/groups` | Set the groups working on a project (`{groups: [...]}`); their people are its members |
+| `PATCH /api/projects/{id}` | Rename or re-describe a project |
 | `GET/POST /api/projects/{id}/register`, `PATCH .../register/{item}` | Register items; closing takes an `outcome`, and every change is kept |
 | `GET /api/projects/{id}/register/{item}/history` | One item's history, oldest first |
 | `GET /api/projects/{id}/export` | Full history as JSON |

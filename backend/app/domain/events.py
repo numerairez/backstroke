@@ -24,7 +24,7 @@ OPERATIONS = ("create", "update", "delete")
 
 # Fields added after an entity type first shipped. Create events written before then
 # lack them, so replay fills in the default and old and new history fold alike.
-BACKFILL: dict[str, dict[str, Any]] = {"deliverable": {"phases": None, "finished_on": None}}
+BACKFILL: dict[str, dict[str, Any]] = {"deliverable": {"phases": None, "finished_on": None, "jira_url": None}}
 
 State = dict[str, dict[str, dict[str, Any]]]
 

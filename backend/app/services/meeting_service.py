@@ -408,7 +408,7 @@ def _link(session: Session, project_id: str, item: RegisterItem, outcome: str, b
         if replacement is None or replacement.kind != "decision" or replacement.id == item.id:
             raise fail("superseded_by_required", "Name the decision that supersedes this one, e.g. D-9")
         if replacement.status != "active":
-            raise fail("superseded_by_inactive", f"{_ref(replacement)} is itself superseded")
+            raise fail("superseded_by_inactive", f"{_ref(replacement)} is no longer active")
         return replacement
     if outcome == "happened":
         if body.became:
@@ -462,7 +462,7 @@ def update_item(session: Session, project_id: str, item_id: int, body: ItemUpdat
             raise fail("invalid_date", f"{body.closed_on!r} is not a YYYY-MM-DD date")
         if status == open_status:
             if item.kind == "decision":
-                raise fail("decision_locked", "A superseded decision stays superseded; record a new decision instead")
+                raise fail("decision_locked", "A closed decision stays closed; record a new decision instead")
             item.outcome, item.superseded_by_id, item.closed_on = None, None, None
         else:
             outcome = body.outcome or ("superseded" if item.kind == "decision" else None)

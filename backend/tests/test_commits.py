@@ -18,7 +18,7 @@ def test_single_date_change_creates_commit_and_event(client, pid):
     result = commit(client, pid, [move("uat", end_date="2026-10-20")], reason="UAT needs an extra two days")
     assert result["version"] == before["version"] + 1
     assert result["commit"]["reason"] == "UAT needs an extra two days"
-    assert result["commit"]["author"] == "tester"
+    assert result["commit"]["author"] == "Priya"  # whoever is signed in, not what the request says
     assert result["commit"]["events"] == [
         {"entity_type": "deliverable", "entity_id": "uat", "operation": "update", "field_name": "end_date", "old_value": "2026-10-16", "new_value": "2026-10-20"}
     ]
@@ -90,6 +90,7 @@ def test_no_op_commit_is_rejected(client, pid):
         ([move("nope", start_date="2026-10-29")], "not_found"),
         ([move("uat", workstream_id="missing")], "missing_workstream"),
         ([move("uat", colour="red")], "invalid_field"),
+        ([move("uat", jira_url="MNL-418")], "invalid_field"),
         ([{"entity_type": "dependency", "operation": "create", "fields": {"predecessor_id": "go-live", "successor_id": "data-model"}}], "dependency_cycle"),
         ([{"entity_type": "dependency", "operation": "create", "fields": {"predecessor_id": "uat", "successor_id": "go-live"}}], "duplicate_dependency"),
         ([{"entity_type": "workstream", "entity_id": "testing", "operation": "delete"}], "missing_workstream"),
@@ -98,6 +99,15 @@ def test_no_op_commit_is_rejected(client, pid):
 def test_validation_rules(client, pid, changes, code):
     res = commit(client, pid, changes, expect=422)
     assert code in {e["code"] for e in res["errors"]}
+
+
+def test_jira_link_is_optional_and_clears_when_blank(client, pid):
+    url = "https://acme.atlassian.net/browse/MNL-418"
+    state = commit(client, pid, [move("uat", jira_url=f"  {url} ")], reason="Track in JIRA")["state"]
+    assert next(d for d in state["deliverables"] if d["id"] == "uat")["jira_url"] == url
+    assert next(d for d in state["deliverables"] if d["id"] == "go-live")["jira_url"] is None
+    state = commit(client, pid, [move("uat", jira_url="")], reason="Wrong ticket")["state"]
+    assert next(d for d in state["deliverables"] if d["id"] == "uat")["jira_url"] is None
 
 
 def test_create_and_link_in_one_commit(client, pid):

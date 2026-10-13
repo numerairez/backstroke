@@ -18,8 +18,8 @@ interface Props {
   preview: Preview | null;
   categories: Category[];
   version: number;
+  /** The signed-in person, recorded as the author. */
   author: string;
-  onAuthorChange: (author: string) => void;
   onFinish: (input: { author: string; withCommit: boolean; reason: string; category: string | null }) => Promise<void>;
   onReload: () => Promise<void>;
   onClose: () => void;
@@ -160,7 +160,7 @@ export function FinishMeetingDialog(props: Props) {
 
         <label className="field">
           <span>Author</span>
-          <input value={props.author} placeholder="Your name" onChange={(e) => props.onAuthorChange(e.target.value)} />
+          <input value={props.author} readOnly title="You're signed in as this person" />
         </label>
 
         {error && (

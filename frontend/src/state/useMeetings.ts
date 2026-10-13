@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ItemUpdate } from "../api/client";
-import type { Attendee, ItemInput, Meeting, Person, RegisterItem, Roster } from "../types";
+import type { Attendee, ItemInput, Meeting, Person, RegisterItem } from "../types";
 
 export type SaveState = "saved" | "saving" | "failed";
 
 export interface MeetingsStore {
   meetings: Meeting[];
   register: RegisterItem[];
-  /** The project's people, offered when adding attendees and owners. */
+  /** The project's members, offered when adding attendees and owners. Edited in Settings. */
   people: Person[];
-  /** The project's groups in their saved order, including empty ones. */
+  /** The groups the project's members are in, in the organisation's order. */
   groups: string[];
   error: string | null;
   saveState: SaveState;
@@ -24,7 +24,6 @@ export interface MeetingsStore {
   finished: (meeting: Meeting) => Promise<void>;
   createItem: (input: ItemInput & { author?: string }) => Promise<RegisterItem>;
   updateItem: (itemId: number, input: ItemUpdate) => Promise<RegisterItem>;
-  savePeople: (roster: Roster) => Promise<Roster>;
 }
 
 const SAVE_DELAY_MS = 700;
@@ -147,16 +146,5 @@ export function useMeetings(projectId: string | null): MeetingsStore {
     [projectId],
   );
 
-  const savePeople = useCallback(
-    async (roster: Roster) => {
-      if (!projectId) throw new Error("no project");
-      const saved = await api.savePeople(projectId, roster);
-      setPeople(saved.people);
-      setGroups(saved.groups);
-      return saved;
-    },
-    [projectId],
-  );
-
-  return { meetings, register, people, groups, error, saveState, reload, create, edit, flush, remove, finished, createItem, updateItem, savePeople };
+  return { meetings, register, people, groups, error, saveState, reload, create, edit, flush, remove, finished, createItem, updateItem };
 }

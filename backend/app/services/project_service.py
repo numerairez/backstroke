@@ -1,4 +1,4 @@
-"""Projects and named baselines."""
+"""Projects and named baselines. A project holds a plan (lanes and deliverables), meetings and a register."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..domain.commands import DomainError
 from ..domain.models import Baseline, Commit, Project
+from . import people_service
 from .commit_service import NotFound, require_project, utc_now
 from .version_service import current_version
 
@@ -24,6 +25,8 @@ def project_to_dict(session: Session, project: Project) -> dict[str, Any]:
         "created_at": project.created_at,
         "version": current_version(session, project.id),
         "baselines": list_baselines(session, project.id),
+        "groups": people_service.project_groups(session, project.id),
+        "members": people_service.member_names(session, project.id),
     }
 
 
@@ -32,14 +35,38 @@ def list_projects(session: Session) -> list[dict[str, Any]]:
     return [project_to_dict(session, p) for p in projects]
 
 
-def create_project(session: Session, name: str, description: str = "", project_id: str | None = None, created_at: str | None = None) -> Project:
+def _require_name(name: str | None) -> str:
     if not name or not name.strip():
         raise DomainError([{"change_index": None, "code": "name_required", "message": "A project name is required"}])
+    return name.strip()
+
+
+def create_project(
+    session: Session,
+    name: str,
+    description: str = "",
+    project_id: str | None = None,
+    created_at: str | None = None,
+    groups: list[str] = (),
+) -> Project:
+    name = _require_name(name)
     if project_id is None:
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:32] or "project"
         project_id = f"{slug}-{uuid.uuid4().hex[:6]}"
-    project = Project(id=project_id, name=name.strip(), description=description.strip(), created_at=created_at or utc_now())
+    project = Project(id=project_id, name=name, description=description.strip(), created_at=created_at or utc_now())
     session.add(project)
+    session.flush()
+    if groups:
+        people_service.set_groups(session, project.id, list(groups))
+    return project
+
+
+def update_project(session: Session, project_id: str, name: str | None = None, description: str | None = None) -> Project:
+    project = require_project(session, project_id)
+    if name is not None:
+        project.name = _require_name(name)
+    if description is not None:
+        project.description = description.strip()
     session.flush()
     return project
 

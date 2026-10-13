@@ -205,6 +205,8 @@ CHECKOUT_PROGRESS = [
 
 
 PEOPLE = ["Priya", "Dana", "Ravi", "Marco", "Jo", "Lena"]
+# The Checkout Revamp team.
+CHECKOUT_PEOPLE = [("Sam", ["Delivery"]), ("Noor", ["Engineering"]), ("Theo", ["Engineering"]), ("Mei", ["QA"])]
 GROUPS = {"Priya": ["PMO", "Steering"], "Dana": ["Business", "Steering"], "Ravi": ["Data"], "Marco": ["AI agent"], "Jo": ["AI agent"], "Lena": ["Business"]}
 
 # Meetings for the example program: (title, date, finished at, absent, notes, items, linked commit, items done later).
@@ -253,8 +255,20 @@ MEETINGS = [
 ]
 
 
+def seed_people(session: Session) -> None:
+    """One organisation list. Projects take groups; the PMO (Priya) works on both."""
+    people_service.replace_org(
+        session,
+        [PersonInput(name=n, groups=GROUPS[n]) for n in PEOPLE] + [PersonInput(name=n, groups=g) for n, g in CHECKOUT_PEOPLE],
+        projects_by_group={
+            **{g: [PROJECT_ID] for g in ("Steering", "Business", "Data", "AI agent")},
+            "PMO": [PROJECT_ID, CHECKOUT_ID],
+            **{g: [CHECKOUT_ID] for g in ("Delivery", "Engineering", "QA")},
+        },
+    )
+
+
 def seed_meetings(session: Session) -> None:
-    people_service.replace_people(session, PROJECT_ID, [PersonInput(name=n, groups=GROUPS[n]) for n in PEOPLE])
     for title, held_on, finished_at, absent, notes, items, seq, done in MEETINGS:
         attendees = [Attendee(name=n, present=n not in absent) for n in PEOPLE]
         meeting = meeting_service.create_meeting(session, PROJECT_ID, title, held_on, attendees, notes=notes, created_at=finished_at)
@@ -309,6 +323,7 @@ def seed(session: Session) -> bool:
             finished_on=finished_on,
             created_at=created_at,
         )
+    seed_people(session)
     return True
 
 

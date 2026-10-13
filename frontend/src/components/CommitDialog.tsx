@@ -13,8 +13,8 @@ interface Props {
   preview: Preview | null;
   categories: Category[];
   version: number;
+  /** The signed-in person, recorded as the author. */
   author: string;
-  onAuthorChange: (author: string) => void;
   onCommit: (input: { reason: string; category: string | null; reference: string | null; author: string }) => Promise<void>;
   onReload: () => Promise<void>;
   onClose: () => void;
@@ -120,7 +120,7 @@ export function CommitDialog(props: Props) {
           </label>
           <label className="field">
             <span>Author</span>
-            <input value={props.author} placeholder="Your name" onChange={(e) => props.onAuthorChange(e.target.value)} />
+            <input value={props.author} readOnly title="You're signed in as this person" />
           </label>
         </div>
         {category && <p className="muted small">{props.categories.find((c) => c.code === category)?.description}</p>}

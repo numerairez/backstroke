@@ -46,6 +46,11 @@ def _signed(n: int) -> str:
 # --- Commit history in words -------------------------------------------------------------
 
 
+def jira_key(url: str | None) -> str:
+    """MNL-418 from https://jira.example.com/browse/MNL-418: what follows the last slash."""
+    return (url or "").rstrip("/").rsplit("/", 1)[-1]
+
+
 def _name(state: State, entity_type: str, entity_id: str) -> str:
     collection = {"workstream": "workstreams", "deliverable": "deliverables", "dependency": "dependencies"}[entity_type]
     entity = state[collection].get(entity_id)
@@ -123,6 +128,8 @@ def describe_events(before: State, events: list[Event], only: set[int] | None = 
                 lines.append(f"{name}: moved from {_name(state, 'workstream', e.old_value)} to {_name(state, 'workstream', e.new_value)}")
             elif e.field_name == "type":
                 lines.append(f"{name}: now a {e.new_value}")
+            elif e.field_name == "jira_url":
+                lines.append(f"{name}: JIRA {jira_key(e.new_value)}" if e.new_value else f"{name}: JIRA link removed")
         elif e.entity_type == "workstream":
             if e.operation == "create":
                 lines.append(f"Added workstream {e.new_value['name']}")
@@ -238,14 +245,15 @@ def build_markdown(
         add("|---|---|---|---|---|")
         for d in rows:
             s = statuses[d["id"]]
+            label = cell(d["name"]) + (f" ([{cell(jira_key(d['jira_url']))}]({d['jira_url']}))" if d.get("jira_url") else "")
             phases = "; ".join(
                 f"{sp['name']} {sp['start_date']} to {sp['end_date']}" + (f" (done {p['finished_on']})" if p.get("finished_on") else "")
                 for sp, p in zip(phase_spans(d), d.get("phases") or [])
             )
             if d["type"] == "milestone":
-                add(f"| {cell(d['name'])} (milestone) | {d['start_date']} | | | |")
+                add(f"| {label} (milestone) | {d['start_date']} | | | |")
             else:
-                add(f"| {cell(d['name'])} | {d['start_date']} | {d['end_date']} | {cell(status_label(s))} | {cell(phases)} |")
+                add(f"| {label} | {d['start_date']} | {d['end_date']} | {cell(status_label(s))} | {cell(phases)} |")
     add("")
     add("## Dependencies")
     add("")
@@ -339,7 +347,7 @@ def build_markdown(
         add("|---|---|---|---|---|" + ("---|" if due_col else "") + "---|")
         for i in items:
             where = f"{i['meeting']['title']} {i['meeting']['held_on']}" if i["meeting"] else f"register {i['created_at'][:10]}"
-            if i["status"] == "superseded":
+            if i["outcome"] == "superseded":
                 status = f"superseded by {i['superseded_by']}"
             elif not i["open"]:
                 status = f"{i['outcome'] or 'closed'} {i['closed_on'] or ''}".strip() + (f", became {i['became']}" if i["became"] else "")

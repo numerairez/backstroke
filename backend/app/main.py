@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .api.auth import auth_router
 from .api.routes import install_error_handlers, router
 from .persistence.db import database_url, init_db, make_engine, make_sessionmaker
 
@@ -27,6 +28,7 @@ def create_app(db_url: str | None = None, seed: bool | None = None) -> FastAPI:
     app = FastAPI(title="Backstroke — Project Deliverables Tracker", version="0.1.0")
     app.state.engine = engine
     app.state.sessionmaker = sessionmaker
+    app.include_router(auth_router)
     app.include_router(router)
     install_error_handlers(app)
 

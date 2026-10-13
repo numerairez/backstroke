@@ -28,7 +28,7 @@ class CommitRequest(BaseModel):
     reason: str
     category: str | None = None
     reference: str | None = None
-    author: str
+    author: str = ""  # filled in by the server from the signed-in account
     base_version: int
     changes: list[Change]
 
@@ -38,7 +38,7 @@ class PreviewRequest(BaseModel):
 
 
 class ProgressRequest(BaseModel):
-    author: str
+    author: str = ""  # filled in by the server from the signed-in account
     base_version: int
     deliverable_id: str
     phase: int | None = None  # index into the deliverable's phases; None for a deliverable without phases
@@ -46,7 +46,7 @@ class ProgressRequest(BaseModel):
 
 
 class RevertRequest(BaseModel):
-    author: str
+    author: str = ""  # filled in by the server from the signed-in account
     base_version: int
     reason: str | None = None
     category: str | None = "correction"
@@ -60,6 +60,12 @@ class BaselineRequest(BaseModel):
 class ProjectCreateRequest(BaseModel):
     name: str
     description: str = ""
+    groups: list[str] = []  # the groups working on it; their people are its members
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
 
 
 class DomainError(Exception):

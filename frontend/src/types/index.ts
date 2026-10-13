@@ -29,6 +29,8 @@ export interface Deliverable {
   phases?: Phase[] | null;
   /** When a deliverable without phases was marked done (phased ones use their phases). */
   finished_on?: string | null;
+  /** Link to the JIRA ticket; shown as its key, e.g. MNL-418. */
+  jira_url?: string | null;
 }
 
 export interface Dependency {
@@ -74,6 +76,10 @@ export interface Project {
   created_at: string;
   version: number;
   baselines: Baseline[];
+  /** The groups working on the project, in the organisation's order. */
+  groups: string[];
+  /** Everyone in those groups, in the organisation's order. */
+  members: string[];
 }
 
 export interface CommitSummary {
@@ -235,19 +241,49 @@ export const OUTCOMES: Record<ItemKind, string[]> = {
   action: ["done", "dropped"],
   risk: ["mitigated", "passed", "accepted", "happened"],
   issue: ["resolved", "accepted"],
-  decision: ["superseded"],
+  decision: ["superseded", "withdrawn"],
 };
 
-/** Someone on the project, in any number of teams such as "Data". */
+/** Someone on a project, in any number of teams such as "Data". */
 export interface Person {
   name: string;
   groups: string[];
 }
 
-/** The project's people and its groups, in order. A group can have no one in it yet. */
+/** A project's people (its members) and the groups they're in, in order. */
 export interface Roster {
   people: Person[];
   groups: string[];
+}
+
+/** Someone in the organisation, and the ids of the projects their groups put them on. */
+export interface OrgPerson extends Person {
+  /** Missing for someone added but not saved yet. Kept across renames, so their account follows them. */
+  id?: number;
+  projects: string[];
+}
+
+/** A person's sign-in. Admins change Settings and see every project. */
+export interface Account {
+  id: number;
+  name: string;
+  person_id: number;
+  email: string;
+  is_admin: boolean;
+}
+
+export interface Me {
+  account: Account | null;
+  /** No account exists yet: whoever registers first becomes the admin. */
+  needs_setup: boolean;
+}
+
+/** Everyone in the organisation and its groups, in order. A group can have no one in it yet. */
+export interface OrgRoster {
+  people: OrgPerson[];
+  groups: string[];
+  /** The projects each group works on; a group on none is left out. */
+  projects_by_group: Record<string, string[]>;
 }
 
 export interface Attendee {

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Change, Deliverable, PlanState } from "../types";
 import { addDays, daysBetween, formatDate } from "../state/dates";
 import { DEFAULT_WORKFLOW, addPhase, hasPhases, minDuration, moveEnd, moveStart, phaseSpans, refitPhases, removePhase, renamePhase, splitIntoPhases } from "../state/phases";
+import { jiraKey } from "../state/jira";
 import { newId } from "../state/staging";
 import { deliverableStatus, phaseStatuses, spanStatus, statusLabel, type Status } from "../state/status";
 
@@ -49,11 +50,17 @@ function ProgressAction({ id, status, asOf, onDone, onReopen, reopenTitle }: { i
 }
 
 /** Text input that stages its value on blur/Enter instead of on every keystroke. */
-function CommitOnBlurInput({ value, onCommit, disabled, ...rest }: { value: string; onCommit: (v: string) => void; disabled?: boolean } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
+function CommitOnBlurInput({
+  value,
+  onCommit,
+  disabled,
+  allowEmpty,
+  ...rest
+}: { value: string; onCommit: (v: string) => void; disabled?: boolean; allowEmpty?: boolean } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
   const commit = () => {
-    if (draft.trim() && draft !== value) onCommit(draft.trim());
+    if ((draft.trim() || allowEmpty) && draft.trim() !== value) onCommit(draft.trim());
     else setDraft(value);
   };
   return (
@@ -281,6 +288,27 @@ function DeliverableInspector({ d, props }: { d: Deliverable; props: Props }) {
             </option>
           ))}
         </select>
+
+        <label htmlFor={`jira-${d.id}`}>JIRA No.</label>
+        <div className="jira-field">
+          {editable && (
+            <CommitOnBlurInput
+              id={`jira-${d.id}`}
+              type="url"
+              value={d.jira_url ?? ""}
+              allowEmpty
+              placeholder="Paste the JIRA link (optional)"
+              onCommit={(url) => update({ jira_url: url || null })}
+            />
+          )}
+          {d.jira_url ? (
+            <a href={d.jira_url} target="_blank" rel="noreferrer" title={d.jira_url}>
+              {jiraKey(d.jira_url)} ↗
+            </a>
+          ) : (
+            !editable && <span className="muted">None</span>
+          )}
+        </div>
 
         {d.type === "milestone" ? (
           <>

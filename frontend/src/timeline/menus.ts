@@ -139,6 +139,8 @@ export function deliverableMenu(ctx: MenuContext, id: string, phase: number | nu
   const progress = progressEntries(ctx, d, phase);
 
   return [
+    ...details,
+    "separator",
     { label: "Rename…", hint: "F2", onSelect: () => ctx.prompt({ label: "Name", value: d.name, onSubmit: (name) => update({ name }) }) },
     ...progress,
     "separator",
@@ -173,8 +175,6 @@ export function deliverableMenu(ctx: MenuContext, id: string, phase: number | nu
         }),
       ],
     },
-    "separator",
-    ...details,
     "separator",
     {
       label: `Delete ${d.type === "milestone" ? "milestone" : "deliverable"}`,

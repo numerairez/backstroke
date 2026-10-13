@@ -65,7 +65,7 @@ export function KnowledgeDialog(props: Props) {
         <div className="kb-options">
           {option("history", "Change history", "every commit with its reason")}
           {option("notes", "Meeting notes", "as written")}
-          {option("closed", "Closed items", "done actions, closed risks and issues, superseded decisions")}
+          {option("closed", "Closed items", "done actions, closed risks and issues, superseded or withdrawn decisions")}
         </div>
         {error && <p className="callout error small">{error}</p>}
         <pre className="kb-preview" tabIndex={0}>

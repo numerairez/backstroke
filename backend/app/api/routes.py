@@ -1,25 +1,28 @@
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
-from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, RevertRequest
+from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, ProjectUpdateRequest, RevertRequest
 from ..domain.events import serialize_state
-from ..domain.meetings import FinishMeetingRequest, ItemCreateRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest, PeopleRequest
+from ..domain.meetings import FinishMeetingRequest, ItemCreateRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest, PeopleRequest, ProjectGroupsRequest
 from ..domain.validators import REASON_CATEGORIES
 from ..services import commit_service, diff_service, history_service, knowledge_service, meeting_service, people_service, trail_service, metrics_service, project_service, projection_service, version_service
+from ..services.auth_service import Forbidden, Unauthorized
 from ..services.commit_service import NotFound, VersionConflict
+from .auth import current_account, require_admin
+from .session import get_session
 
-router = APIRouter(prefix="/api")
+# Everything here needs a signed-in account, and a project only its members (or an admin) can see.
+router = APIRouter(prefix="/api", dependencies=[Depends(current_account)])
 
 
-def get_session(request: Request) -> Iterator[Session]:
-    # Write routes commit explicitly before returning; anything uncommitted is rolled back on close.
-    with request.app.state.sessionmaker() as session:
-        yield session
+def _author(request: Request) -> str:
+    """Whoever is signed in; any author named in the request body is ignored."""
+    return request.state.author
 
 
 def _version_or_404(session: Session, project_id: str, version: int) -> int:
@@ -35,13 +38,15 @@ def categories() -> list[dict[str, Any]]:
 
 
 @router.get("/projects")
-def list_projects(session: Session = Depends(get_session)) -> list[dict[str, Any]]:
-    return project_service.list_projects(session)
+def list_projects(request: Request, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    """The projects the signed-in person's groups work on; every project for an admin."""
+    account = request.state.account
+    return [p for p in project_service.list_projects(session) if account.is_admin or request.state.author in p["members"]]
 
 
-@router.post("/projects", status_code=201)
+@router.post("/projects", status_code=201, dependencies=[Depends(require_admin)])
 def create_project(body: ProjectCreateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
-    project = project_service.create_project(session, body.name, body.description)
+    project = project_service.create_project(session, body.name, body.description, groups=body.groups)
     session.commit()
     return project_service.project_to_dict(session, project)
 
@@ -49,6 +54,46 @@ def create_project(body: ProjectCreateRequest, session: Session = Depends(get_se
 @router.get("/projects/{project_id}")
 def get_project(project_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     return project_service.project_to_dict(session, commit_service.require_project(session, project_id))
+
+
+@router.patch("/projects/{project_id}", dependencies=[Depends(require_admin)])
+def update_project(project_id: str, body: ProjectUpdateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    project = project_service.update_project(session, project_id, body.name, body.description)
+    session.commit()
+    return project_service.project_to_dict(session, project)
+
+
+@router.put("/projects/{project_id}/groups", dependencies=[Depends(require_admin)])
+def set_project_groups(project_id: str, body: ProjectGroupsRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Make exactly these groups (by name) the ones working on the project. Their people are its members. Returns its roster."""
+    roster = people_service.set_groups(session, project_id, body.groups)
+    session.commit()
+    return roster
+
+
+@router.get("/people")
+def list_org_people(request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Everyone in the organisation with their groups and the projects those put them on, and each group's projects.
+
+    Projects someone can't see are left out, so People doesn't reveal them.
+    """
+    roster = people_service.list_org(session)
+    if request.state.account.is_admin:
+        return roster
+    visible = {p["id"] for p in list_projects(request, session)}
+    return {
+        **roster,
+        "people": [{**p, "projects": [x for x in p["projects"] if x in visible]} for p in roster["people"]],
+        "projects_by_group": {g: kept for g, ps in roster["projects_by_group"].items() if (kept := [x for x in ps if x in visible])},
+    }
+
+
+@router.put("/people", dependencies=[Depends(require_admin)])
+def replace_org_people(body: PeopleRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Save the whole organisation roster. Order is kept; people and groups are unique ignoring case."""
+    people = people_service.replace_org(session, body.people, body.groups, body.projects_by_group, keep_person_id=request.state.account.person_id)
+    session.commit()
+    return people
 
 
 @router.get("/projects/{project_id}/state")
@@ -85,12 +130,12 @@ def preview(project_id: str, body: PreviewRequest, session: Session = Depends(ge
 
 
 @router.post("/projects/{project_id}/commits", status_code=201)
-def create_commit(project_id: str, body: CommitRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+def create_commit(project_id: str, body: CommitRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
     commit, events = commit_service.create_commit(
         session,
         project_id,
         reason=body.reason,
-        author=body.author,
+        author=_author(request),
         base_version=body.base_version,
         changes=body.changes,
         category=body.category,
@@ -102,12 +147,12 @@ def create_commit(project_id: str, body: CommitRequest, session: Session = Depen
 
 
 @router.post("/projects/{project_id}/progress", status_code=201)
-def record_progress(project_id: str, body: ProgressRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+def record_progress(project_id: str, body: ProgressRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
     """Mark done or reopen: one click, recorded as its own commit without a reason."""
     commit, events = commit_service.record_progress(
         session,
         project_id,
-        author=body.author,
+        author=_author(request),
         base_version=body.base_version,
         deliverable_id=body.deliverable_id,
         phase=body.phase,
@@ -119,9 +164,9 @@ def record_progress(project_id: str, body: ProgressRequest, session: Session = D
 
 
 @router.post("/projects/{project_id}/commits/{seq}/revert", status_code=201)
-def revert_commit(project_id: str, seq: int, body: RevertRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+def revert_commit(project_id: str, seq: int, body: RevertRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
     commit, events = commit_service.revert_commit(
-        session, project_id, seq, author=body.author, base_version=body.base_version, reason=body.reason, category=body.category
+        session, project_id, seq, author=_author(request), base_version=body.base_version, reason=body.reason, category=body.category
     )
     result = commit_service.commit_result(session, project_id, commit, events)
     session.commit()
@@ -198,15 +243,8 @@ def export_knowledge(
 
 @router.get("/projects/{project_id}/people")
 def list_people(project_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """The project's members and the groups they're in. Edit them under /people and /projects/{id}/groups."""
     return people_service.list_people(session, project_id)
-
-
-@router.put("/projects/{project_id}/people")
-def replace_people(project_id: str, body: PeopleRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
-    """Save the whole roster. Order is kept; people and groups are unique ignoring case."""
-    people = people_service.replace_people(session, project_id, body.people, body.groups)
-    session.commit()
-    return people
 
 
 @router.get("/projects/{project_id}/meetings")
@@ -240,8 +278,9 @@ def delete_meeting(project_id: str, meeting_id: int, session: Session = Depends(
 
 
 @router.post("/projects/{project_id}/meetings/{meeting_id}/finish", status_code=201)
-def finish_meeting(project_id: str, meeting_id: int, body: FinishMeetingRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+def finish_meeting(project_id: str, meeting_id: int, body: FinishMeetingRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
     """Record the meeting's actions, risks and decisions, plus at most one plan commit, atomically."""
+    body.author = _author(request)
     result = meeting_service.finish_meeting(session, project_id, meeting_id, body)
     session.commit()
     return result
@@ -271,14 +310,15 @@ def list_register(project_id: str, session: Session = Depends(get_session)) -> l
 
 
 @router.post("/projects/{project_id}/register", status_code=201)
-def create_register_item(project_id: str, body: ItemCreateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
-    item = meeting_service.create_item(session, project_id, ItemInput(**body.model_dump(exclude={"author"})), author=body.author)
+def create_register_item(project_id: str, body: ItemCreateRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
+    item = meeting_service.create_item(session, project_id, ItemInput(**body.model_dump(exclude={"author"})), author=_author(request))
     session.commit()
     return meeting_service.item_to_dict(session, item)
 
 
 @router.patch("/projects/{project_id}/register/{item_id}")
-def update_register_item(project_id: str, item_id: int, body: ItemUpdateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+def update_register_item(project_id: str, item_id: int, body: ItemUpdateRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
+    body.author = _author(request)
     item = meeting_service.update_item(session, project_id, item_id, body)
     session.commit()
     return meeting_service.item_to_dict(session, item)
@@ -306,6 +346,14 @@ def install_error_handlers(app) -> None:
                 "message": f"The project changed since you started editing. Review v{exc.current_version} before committing.",
             },
         )
+
+    @app.exception_handler(Unauthorized)
+    async def _unauthorized(_request, _exc):
+        return JSONResponse(status_code=401, content={"code": "UNAUTHORIZED", "message": "Sign in to continue"})
+
+    @app.exception_handler(Forbidden)
+    async def _forbidden(_request, _exc):
+        return JSONResponse(status_code=403, content={"code": "FORBIDDEN", "message": "Only an admin can change this"})
 
     @app.exception_handler(NotFound)
     async def _not_found(_request, exc: NotFound):

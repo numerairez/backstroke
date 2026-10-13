@@ -7,7 +7,9 @@ import { DetailsCard, type DetailsTab } from "./components/DetailsCard";
 import { KnowledgeDialog } from "./components/KnowledgeDialog";
 import { MeetingsView } from "./components/MeetingsView";
 import { PeopleView } from "./components/PeopleView";
-import { RegisterView, isOverdue } from "./components/RegisterView";
+import { ProjectNav, initials } from "./components/ProjectNav";
+import { ProjectSettings } from "./components/ProjectSettings";
+import { RegisterView } from "./components/RegisterView";
 import { TabIcon } from "./components/TabIcon";
 import { SurpriseIndex } from "./components/Trail";
 import { StagedChangesDrawer } from "./components/StagedChangesDrawer";
@@ -25,20 +27,26 @@ import { PHASE_COLORS, phaseNameOrder } from "./state/phases";
 import { deliverableStatus, type StatusKind } from "./state/status";
 import { deliverableMenu, emptyMenu, laneMenu, type LinkRole, type MenuContext } from "./timeline/menus";
 import { TimelineCanvas, type ColorBy } from "./timeline/TimelineCanvas";
-import type { Category, Meeting, PlanState, Project } from "./types";
+import type { Account, Category, Meeting, OrgRoster, PlanState, Project } from "./types";
 
-type View = "plan" | "register" | "people";
+/** The plan (swimlanes above, register below) belongs to the open project; Settings to the organisation and the open project. */
+type View = "plan" | "settings";
+type SettingsTab = "people" | "projects" | "project";
 type Tab = "changes" | "meetings" | "history" | "insights";
-const VIEWS: View[] = ["plan", "register", "people"];
+const VIEWS: View[] = ["plan", "settings"];
+const SETTINGS_TABS: SettingsTab[] = ["people", "projects", "project"];
 /** Opening a meeting widens the panel to at least this, so the notes have room. */
 const MEETING_PANEL_MIN = 640;
 const ZOOMS = [6, 10, 16, 26, 40];
 const SIDEBAR_DEFAULT = 380;
 const SIDEBAR_MIN = 300;
+const REGISTER_MIN = 120;
+const TIMELINE_MIN_HEIGHT = 160;
 /** The timeline keeps at least this much room when the sidebar is widened. */
 const TIMELINE_MIN = 360;
 
-const clampSidebar = (w: number) => Math.round(Math.max(SIDEBAR_MIN, Math.min(w, window.innerWidth - TIMELINE_MIN)));
+const navWidth = () => document.querySelector(".project-nav")?.getBoundingClientRect().width ?? 0;
+const clampSidebar = (w: number) => Math.round(Math.max(SIDEBAR_MIN, Math.min(w, window.innerWidth - navWidth() - TIMELINE_MIN)));
 const PLAY_INTERVAL_MS = 1800;
 
 function stored(key: string, fallback: string): string {
@@ -61,11 +69,29 @@ function isTyping(e: KeyboardEvent) {
   return t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable;
 }
 
-export default function App() {
+interface AppProps {
+  account: Account;
+  /** Re-read who is signed in, e.g. after Settings renames them or changes their admin rights. */
+  onAccountChanged: () => void;
+  onSignOut: () => void;
+}
+
+export default function App({ account, onAccountChanged, onSignOut }: AppProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(() => stored("backstroke:project", "") || null);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [author, setAuthor] = useState(() => stored("backstroke:author", ""));
+  const [org, setOrg] = useState<OrgRoster | null>(null);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(() => {
+    const t = stored("backstroke:settingsTab", "people") as SettingsTab;
+    return SETTINGS_TABS.includes(t) ? t : "people";
+  });
+  const [navCollapsed, setNavCollapsed] = useState(() => stored("backstroke:navCollapsed", "0") === "1");
+  const [focusNewProject, setFocusNewProject] = useState(0);
+  /** Everyone's sign-ins, for admins managing People. */
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [othersOpen, setOthersOpen] = useState(() => stored("backstroke:othersOpen", "0") === "1");
+  // Everything is recorded under the signed-in person; the server ignores any other name.
+  const author = account.name;
   const [zoom, setZoom] = useState(() => Number(stored("backstroke:zoom", "2")));
   const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebar(Number(stored("backstroke:sidebar", String(SIDEBAR_DEFAULT))) || SIDEBAR_DEFAULT));
   const [colorBy, setColorBy] = useState<ColorBy>(() => (stored("backstroke:colorBy", "lane") === "phase" ? "phase" : "lane"));
@@ -102,11 +128,14 @@ export default function App() {
   const live = viewVersion === null;
 
   useEffect(() => {
-    Promise.all([api.projects(), api.categories()])
-      .then(([ps, cs]) => {
+    Promise.all([api.projects(), api.categories(), api.orgPeople()])
+      .then(([ps, cs, people]) => {
         setProjects(ps);
         setCategories(cs);
-        setProjectId((cur) => (cur && ps.some((x) => x.id === cur) ? cur : (ps[0]?.id ?? null)));
+        setOrg(people);
+        // Otherwise open the first project you're on, or the first there is.
+        const mine = ps.find((x) => x.members.includes(account.name));
+        setProjectId((cur) => (cur && ps.some((x) => x.id === cur) ? cur : ((mine ?? ps[0])?.id ?? null)));
       })
       .catch(() => setBootError("Can't reach the backend. Start it with `uvicorn app.main:app --reload` in backend/."));
   }, []);
@@ -123,6 +152,15 @@ export default function App() {
     setLinking(null);
   }, [projectId]);
   useEffect(() => store("backstroke:view", view), [view]);
+  useEffect(() => store("backstroke:settingsTab", settingsTab), [settingsTab]);
+  useEffect(() => {
+    if (view === "settings" && account.is_admin) api.accounts().then(setAccounts, () => setAccounts(null));
+  }, [view, account.is_admin]);
+  useEffect(() => store("backstroke:othersOpen", othersOpen ? "1" : "0"), [othersOpen]);
+  useEffect(() => {
+    store("backstroke:navCollapsed", navCollapsed ? "1" : "0");
+    setSidebarWidth((w) => clampSidebar(w));
+  }, [navCollapsed]);
   // Floating details and link mode belong to the layout they were opened in.
   useEffect(() => {
     setDetails(null);
@@ -130,7 +168,6 @@ export default function App() {
     setMenu(null);
   }, [view]);
   useEffect(() => store("backstroke:sidebarOpen", sidebarOpen ? "1" : "0"), [sidebarOpen]);
-  useEffect(() => store("backstroke:author", author), [author]);
   useEffect(() => store("backstroke:zoom", String(zoom)), [zoom]);
   useEffect(() => store("backstroke:sidebar", String(sidebarWidth)), [sidebarWidth]);
   useEffect(() => {
@@ -138,6 +175,34 @@ export default function App() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  /** Drag the line between the swimlanes and the register. Its height is null until dragged: the register then takes the room its rows need. */
+  const registerPane = useRef<HTMLDivElement>(null);
+  const [registerHeight, setRegisterHeight] = useState<number | null>(() => Number(stored("backstroke:registerHeight", "")) || null);
+  useEffect(() => store("backstroke:registerHeight", registerHeight ? String(registerHeight) : ""), [registerHeight]);
+  const clampRegister = (h: number) => {
+    const total = registerPane.current?.parentElement?.clientHeight ?? window.innerHeight;
+    return Math.round(Math.max(REGISTER_MIN, Math.min(h, total - TIMELINE_MIN_HEIGHT)));
+  };
+  const startRegisterResize = (e: React.PointerEvent) => {
+    if (e.button !== 0 || !registerPane.current) return;
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const startY = e.clientY;
+    const startHeight = registerPane.current.offsetHeight;
+    document.body.classList.add("resizing", "rows");
+    const onMove = (ev: PointerEvent) => setRegisterHeight(clampRegister(startHeight + startY - ev.clientY));
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.classList.remove("resizing", "rows");
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  };
 
   const startSidebarResize = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -207,10 +272,7 @@ export default function App() {
   const ghost = ghostVersion !== null ? (p.cachedStateAt(ghostVersion) ?? null) : null;
 
   // Row order follows the persisted plan so rows don't jump while dragging or replaying.
-  const order = useMemo(
-    () => [...p.persisted.deliverables].sort((a, b) => a.start_date.localeCompare(b.start_date) || a.id.localeCompare(b.id)).map((d) => d.id),
-    [p.persisted],
-  );
+  const order = useMemo(() => [...p.persisted.deliverables].sort((a, b) => a.start_date.localeCompare(b.start_date) || a.id.localeCompare(b.id)).map((d) => d.id), [p.persisted]);
   const stagedIds = useMemo(() => (showingLive ? stagedEntityIds(p.staged) : new Set<string>()), [p.staged, showingLive]);
   const conflicts = showingLive ? (p.preview?.conflicts ?? []) : [];
 
@@ -230,13 +292,10 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [playing, p.version]);
 
-  const showVersion = useCallback(
-    (seq: number | null) => {
-      setCompare(null);
-      setViewVersion(seq);
-    },
-    [],
-  );
+  const showVersion = useCallback((seq: number | null) => {
+    setCompare(null);
+    setViewVersion(seq);
+  }, []);
   const play = () => {
     setCompare(null);
     setShowChanges(true);
@@ -301,7 +360,13 @@ export default function App() {
       entity_type: "deliverable",
       entity_id: id,
       operation: "create",
-      fields: { workstream_id: workstreamId, name: type === "milestone" ? "New milestone" : "New deliverable", type, start_date: start, end_date: type === "milestone" ? start : addDays(start, 4) },
+      fields: {
+        workstream_id: workstreamId,
+        name: type === "milestone" ? "New milestone" : "New deliverable",
+        type,
+        start_date: start,
+        end_date: type === "milestone" ? start : addDays(start, 4),
+      },
     });
     setSelectedId(id);
     // Open the card once the new bar is drawn, so it sits beside it.
@@ -319,9 +384,7 @@ export default function App() {
   const revertCommit = async (seq: number) => {
     const c = p.commits.find((x) => x.seq === seq);
     if (!c) return;
-    const who = author.trim() || window.prompt("Your name (recorded as the commit author):")?.trim();
-    if (!who) return;
-    setAuthor(who);
+    const who = author;
     const reason = window.prompt(`Undo #${seq} as a new commit. Reason:`, `Revert #${seq}: ${c.reason}`);
     if (reason === null) return;
     try {
@@ -345,13 +408,33 @@ export default function App() {
     }
   };
 
-  const newProject = async () => {
-    const name = window.prompt("Project name:");
-    if (!name?.trim()) return;
-    const created = await api.createProject(name.trim());
-    setProjects(await api.projects());
-    setProjectId(created.id);
+  const createProject = async (name: string, description: string, groups: string[]) => {
+    const created = await api.createProject(name, description, groups);
+    await reloadDirectory();
+    openProject(created.id);
   };
+  /** A new project needs its groups chosen, so it's made in Settings → Projects. */
+  const newProject = () => {
+    openSettings("projects");
+    setFocusNewProject(Date.now());
+  };
+  const openProject = (id: string) => {
+    setProjectId(id);
+    if (view === "settings") setView("plan");
+  };
+  const openSettings = (t?: SettingsTab) => {
+    if (t) setSettingsTab(t);
+    setView("settings");
+  };
+  /** After Settings saves: projects and people changed, and so may the open project's roster. */
+  const reloadDirectory = async () => {
+    const [ps, people] = await Promise.all([api.projects(), api.orgPeople()]);
+    setProjects(ps);
+    setOrg(people);
+    onAccountChanged();
+    await meetings.reload();
+  };
+  const currentProject = projects.find((x) => x.id === projectId) ?? null;
 
   // An open details card follows the selection, and closes when nothing is selected.
   const select = (id: string | null) => {
@@ -399,9 +482,7 @@ export default function App() {
   // --- Narration for the version on screen ----------------------------------------
   const narratedSeq = !showingLive && shownVersion ? shownVersion : null;
   const narrated = narratedSeq ? p.commits.find((c) => c.seq === narratedSeq) : undefined;
-  const narratedLines = narrated?.events
-    ? describeEvents(narrated.events, [p.cachedStateAt(narrated.seq), p.cachedStateAt(narrated.seq - 1)].filter(Boolean) as PlanState[])
-    : [];
+  const narratedLines = narrated?.events ? describeEvents(narrated.events, [p.cachedStateAt(narrated.seq), p.cachedStateAt(narrated.seq - 1)].filter(Boolean) as PlanState[]) : [];
 
   const phaseNames = useMemo(() => phaseNameOrder(displayed.deliverables), [displayed.deliverables]);
 
@@ -418,9 +499,7 @@ export default function App() {
   }, [displayed.deliverables, asOf]);
 
   const recordProgress = async (id: string, phase: number | null, finishedOn: string | null) => {
-    const who = author.trim() || window.prompt("Your name (recorded as the author):")?.trim();
-    if (!who) return;
-    setAuthor(who);
+    const who = author;
     try {
       const commit = await p.recordProgress(who, id, phase, finishedOn);
       flash(`#${commit.seq}: ${commit.reason}`);
@@ -462,7 +541,6 @@ export default function App() {
 
   const baseline = p.project?.baselines[0];
   const staged = p.staged.length;
-  const overdueActions = meetings.register.filter((i) => isOverdue(i, today)).length;
   // Trail, pre-read and surprise index reload when the plan, the register or a finished meeting changes.
   const recordsKey = `${p.version}|${meetings.register.map((i) => `${i.id}:${i.status}`).join(",")}|${meetings.meetings.filter((m) => m.finished_at).length}`;
   const openMeetingNotes = (id: number | null) => {
@@ -477,9 +555,7 @@ export default function App() {
   const liveMeeting = openMeetingId !== null ? meetings.meetings.find((m) => m.id === openMeetingId && !m.finished_at) : undefined;
   const unlistedPeople = [
     ...new Set([...meetings.meetings.flatMap((m) => m.attendees.map((a) => a.name)), ...meetings.register.flatMap((i) => (i.owner ? [i.owner] : []))]),
-  ].filter(
-    (n) => !meetings.people.some((x) => x.name.toLowerCase() === n.toLowerCase()) && !meetings.groups.some((g) => g.toLowerCase() === n.toLowerCase()),
-  );
+  ].filter((n) => !meetings.people.some((x) => x.name.toLowerCase() === n.toLowerCase()) && !meetings.groups.some((g) => g.toLowerCase() === n.toLowerCase()));
 
   if (bootError) return <div className="boot-error">{bootError}</div>;
 
@@ -609,399 +685,512 @@ export default function App() {
   );
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="topbar-row">
-          <div className="brand">
-            <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
-              <rect x="3" y="7" width="18" height="6" rx="2" fill="var(--accent)" />
-              <rect x="11" y="19" width="18" height="6" rx="2" fill="var(--accent-soft)" />
-            </svg>
-            Backstroke
-            <span className="tagline">Plan forward. Look back.</span>
-          </div>
-          <div className="spacer" />
-          <select className="project-select" value={projectId ?? ""} onChange={(e) => setProjectId(e.target.value || null)} aria-label="Project">
-            {projects.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.name}
-              </option>
-            ))}
-          </select>
-          <button className="small secondary" onClick={newProject}>
-            New project
-          </button>
-          {projectId && (
-            <>
-              <button className="small link" onClick={() => setKnowledgeOpen(true)} title="The project as one Markdown file to paste into an assistant">
-                Knowledge base
-              </button>
-              <a className="small link" href={api.exportUrl(projectId)} download={`${projectId}-history.json`}>
-                Export
-              </a>
-            </>
-          )}
-        </div>
-        <div className="toolbar">
-          <nav className="view-nav" aria-label="Views">
-            {(
-              [
-                ["plan", "Plan", null],
-                ["register", "Register", overdueActions ? `${overdueActions} overdue` : null],
-                ["people", "People", null],
-              ] as [View, string, string | null][]
-            ).map(([key, label, badge]) => (
-              <button key={key} aria-current={view === key ? "page" : undefined} className={view === key ? "active" : ""} onClick={() => setView(key)}>
-                {label}
-                {badge && <span className={`nav-badge ${key === "register" ? "overdue" : "live"}`}>{badge}</span>}
-              </button>
-            ))}
-          </nav>
-          {timelineShown && (
-            <>
-              <div className="versions">
-                {baseline && (
-                  <button className="version-chip" title="Compare baseline with current" onClick={() => showCompare({ from: baseline.version, to: p.version })}>
-                    Baseline: <b>{baseline.name}</b> (#{baseline.version})
-                  </button>
-                )}
-                <span className="version-chip">
-                  Current: <b>#{p.version}</b>
-                </span>
+    <div className={`shell ${navCollapsed ? "nav-collapsed" : ""}`}>
+      <ProjectNav
+        projects={projects}
+        projectId={projectId}
+        inSettings={view === "settings"}
+        account={account}
+        collapsed={navCollapsed}
+        othersOpen={othersOpen}
+        onToggleCollapsed={() => setNavCollapsed((c) => !c)}
+        onToggleOthers={() => setOthersOpen((o) => !o)}
+        onOpen={openProject}
+        onNewProject={newProject}
+        onSettings={() => openSettings()}
+      />
+      <div className="app">
+        <header className="topbar">
+          <div className="topbar-row">
+            {view === "settings" ? (
+              <div className="project-title">
+                <h1>Settings</h1>
+                <span className="muted">People, projects and the open project</span>
               </div>
-              <div className="status-counts" title={`Status as of ${asOf}`}>
-                {statusCounts.done > 0 && <span className="st done">{statusCounts.done} done</span>}
-                {statusCounts.progress > 0 && <span className="st">{statusCounts.progress} in progress</span>}
-                {statusCounts.behind > 0 && <span className="st behind">{statusCounts.behind} behind</span>}
-                {statusCounts.overdue > 0 && <span className="st overdue">{statusCounts.overdue} overdue</span>}
-                {statusCounts.todo > 0 && <span className="st">{statusCounts.todo} not started</span>}
-              </div>
-              <div className="spacer" />
-              {staged > 0 && (
-                <button className="staged-badge" onClick={() => showTab("changes")}>
-                  <span className="count">{staged}</span> staged · Review & commit
-                </button>
-              )}
-              {phaseNames.length > 0 && (
-                <div className="color-by" role="group" aria-label="Colour bars by">
-                  <span className="muted small">Colour</span>
-                  <div className="seg-toggle">
-                    {(["lane", "phase"] as ColorBy[]).map((c) => (
-                      <button key={c} aria-pressed={colorBy === c} onClick={() => setColorBy(c)}>
-                        {c === "lane" ? "Lane" : "Phase"}
-                      </button>
-                    ))}
-                  </div>
-                  {colorBy === "phase" && (
-                    <span className="phase-legend">
-                      {phaseNames.map((name, i) => (
-                        <span key={name}>
-                          <i style={{ background: PHASE_COLORS[i % PHASE_COLORS.length] }} />
-                          {name}
-                        </span>
-                      ))}
-                      <span>
-                        <i style={{ background: "var(--plain-bar)" }} />
-                        No phases
-                      </span>
-                    </span>
-                  )}
-                </div>
-              )}
-              <div className="zoom" role="group" aria-label="Zoom">
-                <button className="icon" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))} title="Zoom out">
-                  −
-                </button>
-                <button className="icon" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} title="Zoom in">
-                  +
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </header>
-
-      {view === "plan" && (
-        <main className={`workspace ${sidebarOpen ? "" : "panel-closed"}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}>
-          <div className="plan-main">
-            {liveMeeting && !meetingsShown && (
-              <div className="meeting-return">
-                <span>
-                  <span className="live-dot" /> <b>{liveMeeting.title}</b> is in progress
-                </span>
-                <button className="small" onClick={() => showTab("meetings")}>
-                  Back to notes
-                </button>
+            ) : (
+              <div className="project-title">
+                <h1>{currentProject?.name ?? "No project"}</h1>
+                {currentProject?.description && <span className="muted project-description">{currentProject.description}</span>}
               </div>
             )}
-            {timeline}
+            <div className="spacer" />
+            <div className="topbar-account">
+              <span className="nav-initials" aria-hidden="true">
+                {initials(account.name)}
+              </span>
+              <span className="topbar-account-who" title={account.email}>
+                <b>{account.name}</b>
+                {account.is_admin && <span className="muted small">Admin</span>}
+              </span>
+              <button className="small" onClick={onSignOut}>
+                Sign out
+              </button>
+            </div>
           </div>
+          <div className="toolbar">
+            {view === "settings" ? (
+              <nav className="view-nav" aria-label="Settings">
+                {(
+                  [
+                    ["people", "People", org ? String(org.people.length) : null],
+                    ["projects", "Projects", String(projects.length)],
+                    ...(currentProject ? [["project", currentProject.name, null] as [SettingsTab, string, null]] : []),
+                  ] as [SettingsTab, string, string | null][]
+                ).map(([key, label, count]) => (
+                  <button key={key} aria-current={settingsTab === key ? "page" : undefined} className={settingsTab === key ? "active" : ""} onClick={() => setSettingsTab(key)}>
+                    {label}
+                    {count && <span className="muted small">{count}</span>}
+                  </button>
+                ))}
+              </nav>
+            ) : null}
+            {timelineShown && (
+              <>
+                <div className="versions">
+                  {baseline && (
+                    <button className="version-chip" title="Compare baseline with current" onClick={() => showCompare({ from: baseline.version, to: p.version })}>
+                      Baseline: <b>{baseline.name}</b> (#{baseline.version})
+                    </button>
+                  )}
+                  <span className="version-chip">
+                    Current: <b>#{p.version}</b>
+                  </span>
+                </div>
+                <div className="status-counts" title={`Status as of ${asOf}`}>
+                  {statusCounts.done > 0 && <span className="st done">{statusCounts.done} done</span>}
+                  {statusCounts.progress > 0 && <span className="st">{statusCounts.progress} in progress</span>}
+                  {statusCounts.behind > 0 && <span className="st behind">{statusCounts.behind} behind</span>}
+                  {statusCounts.overdue > 0 && <span className="st overdue">{statusCounts.overdue} overdue</span>}
+                  {statusCounts.todo > 0 && <span className="st">{statusCounts.todo} not started</span>}
+                </div>
+                <div className="spacer" />
+                {staged > 0 && (
+                  <button className="staged-badge" onClick={() => showTab("changes")}>
+                    <span className="count">{staged}</span> staged · Review & commit
+                  </button>
+                )}
+                {phaseNames.length > 0 && (
+                  <div className="color-by" role="group" aria-label="Colour bars by">
+                    <span className="muted small">Colour</span>
+                    <div className="seg-toggle">
+                      {(["lane", "phase"] as ColorBy[]).map((c) => (
+                        <button key={c} aria-pressed={colorBy === c} onClick={() => setColorBy(c)}>
+                          {c === "lane" ? "Lane" : "Phase"}
+                        </button>
+                      ))}
+                    </div>
+                    {colorBy === "phase" && (
+                      <span className="phase-legend">
+                        {phaseNames.map((name, i) => (
+                          <span key={name}>
+                            <i style={{ background: PHASE_COLORS[i % PHASE_COLORS.length] }} />
+                            {name}
+                          </span>
+                        ))}
+                        <span>
+                          <i style={{ background: "var(--plain-bar)" }} />
+                          No phases
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="zoom" role="group" aria-label="Zoom">
+                  <button className="icon" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))} title="Zoom out">
+                    −
+                  </button>
+                  <button className="icon" disabled={zoom === ZOOMS.length - 1} onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} title="Zoom in">
+                    +
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </header>
 
-          {sidebarOpen ? (
-            <aside className="sidebar">
+        {view === "plan" && projectId && (
+          <main className={`workspace ${sidebarOpen ? "" : "panel-closed"}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}>
+            <div className="plan-main">
+              {liveMeeting && !meetingsShown && (
+                <div className="meeting-return">
+                  <span>
+                    <span className="live-dot" /> <b>{liveMeeting.title}</b> is in progress
+                  </span>
+                  <button className="small" onClick={() => showTab("meetings")}>
+                    Back to notes
+                  </button>
+                </div>
+              )}
+              {timeline}
               <div
-                className="sidebar-resizer"
+                className="register-resizer"
                 role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize sidebar"
-                aria-valuenow={sidebarWidth}
-                aria-valuemin={SIDEBAR_MIN}
+                aria-orientation="horizontal"
+                aria-label="Resize the register"
                 tabIndex={0}
-                title="Drag to resize. Double-click to reset."
-                onPointerDown={startSidebarResize}
-                onDoubleClick={() => setSidebarWidth(clampSidebar(SIDEBAR_DEFAULT))}
+                title="Drag to resize. Double-click to fit the register."
+                onPointerDown={startRegisterResize}
+                onDoubleClick={() => setRegisterHeight(null)}
                 onKeyDown={(e) => {
-                  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                  if ((e.key === "ArrowUp" || e.key === "ArrowDown") && registerPane.current) {
                     e.preventDefault();
-                    setSidebarWidth((w) => clampSidebar(w + (e.key === "ArrowLeft" ? 24 : -24)));
+                    const h = registerPane.current.offsetHeight;
+                    setRegisterHeight(clampRegister(h + (e.key === "ArrowUp" ? 24 : -24)));
                   }
                 }}
               />
-              <nav className="tabs" role="tablist">
-                {tabs.map((t) => tabButton(t, () => setTab(t.key), tab === t.key ? "active" : ""))}
-                <span className="tab-name">{tabs.find((t) => t.key === tab)?.label}</span>
-                <span className="spacer" />
-                <button className="icon collapse" title="Hide the panel" aria-label="Hide the panel" onClick={() => setSidebarOpen(false)}>
-                  »
-                </button>
-              </nav>
-              <div className="tab-body">
-                {tab === "changes" && (
-                  <StagedChangesDrawer
-                    staged={p.staged}
-                    persisted={p.persisted}
-                    proposed={p.proposed}
-                    preview={p.preview}
-                    selection={p.selection}
-                    selectionPreview={p.selectionPreview}
-                    excluded={p.excluded}
-                    editable={live}
-                    onToggle={p.toggleSelected}
-                    onSelectAll={p.selectAll}
-                    onUnstage={p.unstage}
-                    onDiscard={() => window.confirm(`Discard ${staged} staged change${staged === 1 ? "" : "s"}?`) && p.discard()}
-                    onSelect={(id) => {
-                      showVersion(null);
-                      openDetails(id);
-                    }}
-                    onApplySuggestions={applySuggestions}
-                    onCommit={() => setCommitOpen(true)}
-                  />
-                )}
-                {tab === "history" && (
-                  <>
-                    <div className="seg-toggle history-mode" role="group" aria-label="History">
-                      <button aria-pressed={historyMode === "commits"} onClick={() => setHistoryMode("commits")}>
-                        Commits
-                      </button>
-                      <button aria-pressed={historyMode === "compare"} onClick={() => setHistoryMode("compare")}>
-                        Compare versions
-                      </button>
-                    </div>
-                    {historyMode === "commits" ? (
-                      <HistoryPanel
-                        commits={p.commits}
-                        version={p.version}
-                        viewVersion={compare ? null : viewVersion}
-                        categories={categories}
-                        stateFor={p.cachedStateAt}
-                        onView={(seq) => {
-                          setPlaying(false);
-                          showVersion(seq);
-                          if (seq !== null) {
-                            p.stateAt(seq);
-                            if (seq > 0) p.stateAt(seq - 1);
-                          }
-                        }}
-                        onCompareWithCurrent={(seq) => showCompare({ from: seq, to: p.version })}
-                        onRevert={revertCommit}
-                        onBaseline={tagBaseline}
-                      />
-                    ) : (
-                      projectId && (
-                        <ComparePanel
-                          projectId={projectId}
+              <div ref={registerPane} className={`register-pane ${registerHeight ? "sized" : ""}`} style={registerHeight ? { height: registerHeight } : undefined}>
+                <RegisterView
+                  projectId={projectId}
+                  author={author}
+                  register={meetings.register}
+                  deliverables={p.persisted.deliverables}
+                  today={today}
+                  onSelectDeliverable={focusDeliverable}
+                  people={meetings.people}
+                  onCreate={meetings.createItem}
+                  onUpdate={meetings.updateItem}
+                />
+              </div>
+            </div>
+
+            {sidebarOpen ? (
+              <aside className="sidebar">
+                <div
+                  className="sidebar-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize sidebar"
+                  aria-valuenow={sidebarWidth}
+                  aria-valuemin={SIDEBAR_MIN}
+                  tabIndex={0}
+                  title="Drag to resize. Double-click to reset."
+                  onPointerDown={startSidebarResize}
+                  onDoubleClick={() => setSidebarWidth(clampSidebar(SIDEBAR_DEFAULT))}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                      e.preventDefault();
+                      setSidebarWidth((w) => clampSidebar(w + (e.key === "ArrowLeft" ? 24 : -24)));
+                    }
+                  }}
+                />
+                <nav className="tabs" role="tablist">
+                  {tabs.map((t) => tabButton(t, () => setTab(t.key), tab === t.key ? "active" : ""))}
+                  <span className="tab-name">{tabs.find((t) => t.key === tab)?.label}</span>
+                  <span className="spacer" />
+                  <button className="icon collapse" title="Hide the panel" aria-label="Hide the panel" onClick={() => setSidebarOpen(false)}>
+                    »
+                  </button>
+                </nav>
+                <div className="tab-body">
+                  {tab === "changes" && (
+                    <StagedChangesDrawer
+                      staged={p.staged}
+                      persisted={p.persisted}
+                      proposed={p.proposed}
+                      preview={p.preview}
+                      selection={p.selection}
+                      selectionPreview={p.selectionPreview}
+                      excluded={p.excluded}
+                      editable={live}
+                      onToggle={p.toggleSelected}
+                      onSelectAll={p.selectAll}
+                      onUnstage={p.unstage}
+                      onDiscard={() => window.confirm(`Discard ${staged} staged change${staged === 1 ? "" : "s"}?`) && p.discard()}
+                      onSelect={(id) => {
+                        showVersion(null);
+                        openDetails(id);
+                      }}
+                      onApplySuggestions={applySuggestions}
+                      onCommit={() => setCommitOpen(true)}
+                    />
+                  )}
+                  {tab === "history" && (
+                    <>
+                      <div className="seg-toggle history-mode" role="group" aria-label="History">
+                        <button aria-pressed={historyMode === "commits"} onClick={() => setHistoryMode("commits")}>
+                          Commits
+                        </button>
+                        <button aria-pressed={historyMode === "compare"} onClick={() => setHistoryMode("compare")}>
+                          Compare versions
+                        </button>
+                      </div>
+                      {historyMode === "commits" ? (
+                        <HistoryPanel
                           commits={p.commits}
-                          baselines={p.project?.baselines ?? []}
                           version={p.version}
-                          range={compare}
-                          onChange={(r) => {
+                          viewVersion={compare ? null : viewVersion}
+                          categories={categories}
+                          stateFor={p.cachedStateAt}
+                          onView={(seq) => {
                             setPlaying(false);
-                            setCompare(r);
-                            setViewVersion(r && r.to !== p.version ? r.to : null);
+                            showVersion(seq);
+                            if (seq !== null) {
+                              p.stateAt(seq);
+                              if (seq > 0) p.stateAt(seq - 1);
+                            }
                           }}
-                          onSelect={openDetails}
+                          onCompareWithCurrent={(seq) => showCompare({ from: seq, to: p.version })}
+                          onRevert={revertCommit}
+                          onBaseline={tagBaseline}
                         />
-                      )
+                      ) : (
+                        projectId && (
+                          <ComparePanel
+                            projectId={projectId}
+                            commits={p.commits}
+                            baselines={p.project?.baselines ?? []}
+                            version={p.version}
+                            range={compare}
+                            onChange={(r) => {
+                              setPlaying(false);
+                              setCompare(r);
+                              setViewVersion(r && r.to !== p.version ? r.to : null);
+                            }}
+                            onSelect={openDetails}
+                          />
+                        )
+                      )}
+                    </>
+                  )}
+                  {tab === "meetings" && projectId && (
+                    <MeetingsView
+                      projectId={projectId}
+                      refreshKey={recordsKey}
+                      store={meetings}
+                      deliverables={p.proposed.deliverables}
+                      today={today}
+                      openId={openMeetingId}
+                      onOpen={openMeetingNotes}
+                      mentionRequest={mentionRequest}
+                      stagedCount={p.selection.changes.length}
+                      onReviewChanges={() => setTab("changes")}
+                      onFinish={setFinishing}
+                      onViewCommit={viewCommit}
+                      onSelectDeliverable={focusDeliverable}
+                    />
+                  )}
+                  {tab === "insights" && projectId && (
+                    <>
+                      <MetricsPanel projectId={projectId} version={p.version} baselines={p.project?.baselines ?? []} categories={categories} onSelect={openDetails} />
+                      <SurpriseIndex projectId={projectId} refreshKey={recordsKey} onViewCommit={viewCommit} />
+                    </>
+                  )}
+                </div>
+              </aside>
+            ) : (
+              <aside className="sidebar-rail" aria-label="Panel">
+                <button className="icon" title="Show the panel" aria-label="Show the panel" onClick={() => setSidebarOpen(true)}>
+                  «
+                </button>
+                {tabs.map((t) =>
+                  tabButton(t, () => {
+                    setTab(t.key);
+                    setSidebarOpen(true);
+                  }),
+                )}
+              </aside>
+            )}
+          </main>
+        )}
+
+        {view === "settings" && (
+          <main className="workspace single">
+            {settingsTab === "project" && currentProject ? (
+              <div className="page">
+                <div className="page-inner">
+                  <header className="page-head">
+                    <div>
+                      <h2>{currentProject.name}</h2>
+                      <p className="muted">Who works on this project, and the ways to take it elsewhere.</p>
+                    </div>
+                  </header>
+                  <section className="card project-extras">
+                    <h3>
+                      Members <span className="muted small">{currentProject.members.length}</span>
+                    </h3>
+                    {currentProject.members.length ? (
+                      <p>{currentProject.members.join(", ")}</p>
+                    ) : (
+                      <p className="muted">No members yet. Members come from the groups the project takes, under Projects.</p>
                     )}
-                  </>
-                )}
-                {tab === "meetings" && projectId && (
-                  <MeetingsView
-                    projectId={projectId}
-                    refreshKey={recordsKey}
-                    store={meetings}
-                    deliverables={p.proposed.deliverables}
-                    today={today}
-                    openId={openMeetingId}
-                    onOpen={openMeetingNotes}
-                    mentionRequest={mentionRequest}
-                    stagedCount={p.selection.changes.length}
-                    onReviewChanges={() => setTab("changes")}
-                    onFinish={setFinishing}
-                    onViewCommit={viewCommit}
-                    onSelectDeliverable={focusDeliverable}
-                  />
-                )}
-                {tab === "insights" && projectId && (
+                    <button className="small link" onClick={() => setSettingsTab("projects")}>
+                      Change groups
+                    </button>
+                  </section>
+                  <section className="card project-extras">
+                    <h3>Knowledge base</h3>
+                    <p className="muted">The project as one Markdown file to paste into an assistant.</p>
+                    <button className="small" onClick={() => setKnowledgeOpen(true)}>
+                      Open knowledge base
+                    </button>
+                  </section>
+                  <section className="card project-extras">
+                    <h3>Export</h3>
+                    <p className="muted">The project's full commit history as JSON.</p>
+                    <a className="small button-link" href={api.exportUrl(currentProject.id)} download={`${currentProject.id}-history.json`}>
+                      Download history
+                    </a>
+                  </section>
+                </div>
+              </div>
+            ) : settingsTab === "people" || (settingsTab === "project" && !currentProject) ? (
+              org && (
+                <PeopleView
+                  roster={org}
+                  projects={projects}
+                  unlisted={currentProject && unlistedPeople.length ? { names: unlistedPeople, project: currentProject } : null}
+                  onSave={async (roster) => {
+                    setOrg(await api.saveOrgPeople(roster));
+                    await reloadDirectory();
+                    if (account.is_admin) setAccounts(await api.accounts());
+                  }}
+                  readOnly={!account.is_admin}
+                  accounts={account.is_admin ? accounts : null}
+                  me={account}
+                  onSetAdmin={async (id, isAdmin) => {
+                    await api.setAdmin(id, isAdmin);
+                    setAccounts(await api.accounts());
+                  }}
+                  onRevoke={async (a) => {
+                    await api.removeAccount(a.id);
+                    setAccounts(await api.accounts());
+                  }}
+                />
+              )
+            ) : (
+              org && (
+                <ProjectSettings
+                  readOnly={!account.is_admin}
+                  projects={projects}
+                  org={org}
+                  focusNew={focusNewProject}
+                  onSaved={reloadDirectory}
+                  onOpen={openProject}
+                  onCreate={createProject}
+                />
+              )
+            )}
+          </main>
+        )}
+
+        {view !== "settings" && !projectId && (
+          <main className="workspace single">
+            <div className="page">
+              <div className="page-inner empty-project">
+                <h2>No project open</h2>
+                {account.is_admin ? (
                   <>
-                    <MetricsPanel projectId={projectId} version={p.version} baselines={p.project?.baselines ?? []} categories={categories} onSelect={openDetails} />
-                    <SurpriseIndex projectId={projectId} refreshKey={recordsKey} onViewCommit={viewCommit} />
+                    <p className="muted">Pick a project on the left, or start one. A project holds a plan of swimlanes, its meetings and its register.</p>
+                    <button className="primary" onClick={newProject}>
+                      New project
+                    </button>
                   </>
+                ) : (
+                  <p className="muted">None of your groups works on a project yet. Ask an admin to add one of your groups to a project in Settings.</p>
                 )}
               </div>
-            </aside>
-          ) : (
-            <aside className="sidebar-rail" aria-label="Panel">
-              <button className="icon" title="Show the panel" aria-label="Show the panel" onClick={() => setSidebarOpen(true)}>
-                «
-              </button>
-              {tabs.map((t) =>
-                tabButton(t, () => {
-                  setTab(t.key);
-                  setSidebarOpen(true);
-                }),
-              )}
-            </aside>
-          )}
-        </main>
-      )}
+            </div>
+          </main>
+        )}
 
-      {view === "register" && projectId && (
-        <main className="workspace single">
-          <RegisterView
+        {view === "plan" && projectId && (
+          <footer>
+            <PlaybackControls
+              version={p.version}
+              viewVersion={compare ? (compare.to === p.version && live ? null : compare.to) : viewVersion}
+              commits={p.commits}
+              playing={playing}
+              hasStaged={staged > 0}
+              onView={(seq) => {
+                setPlaying(false);
+                showVersion(seq === p.version && viewVersion === null ? null : seq);
+              }}
+              onPlay={play}
+              onPause={() => setPlaying(false)}
+            />
+          </footer>
+        )}
+
+        {timelineShown && details && displayed.deliverables.some((d) => d.id === details.id) && projectId && (
+          <DetailsCard
+            id={details.id}
+            tab={details.tab}
+            onTab={(t) => setDetails({ ...details, tab: t, focusName: false })}
+            focusName={details.focusName}
+            state={displayed}
+            persisted={p.persisted}
+            editable={editable}
+            stagedIds={stagedIds}
+            asOf={asOf}
             projectId={projectId}
-            author={author}
-            register={meetings.register}
-            deliverables={p.persisted.deliverables}
-            today={today}
-            onSelectDeliverable={focusDeliverable}
-            people={meetings.people}
-            onCreate={meetings.createItem}
-            onUpdate={meetings.updateItem}
+            hasHistory={showingLive && p.persisted.deliverables.some((d) => d.id === details.id)}
+            refreshKey={recordsKey}
+            onStage={p.stage}
+            onRevert={(id) => p.revert("deliverable", id)}
+            onSelect={(id) => (id ? openDetails(id) : (setSelectedId(null), setDetails(null)))}
+            onProgress={recordProgress}
+            onViewCommit={viewCommit}
+            onOpenMeeting={openMeeting}
+            onClose={() => setDetails(null)}
           />
-        </main>
-      )}
+        )}
+        {menu && <ContextMenu request={menu} onClose={() => setMenu(null)} />}
+        {prompt && <QuickPrompt request={prompt} onClose={() => setPrompt(null)} />}
 
-      {view === "people" && projectId && (
-        <main className="workspace single">
-          <PeopleView roster={{ people: meetings.people, groups: meetings.groups }} unlisted={unlistedPeople} onSave={meetings.savePeople} />
-        </main>
-      )}
-
-      {view === "plan" && (
-        <footer>
-          <PlaybackControls
+        {commitOpen && (
+          <CommitDialog
+            staged={p.selection.changes}
+            remaining={p.staged.length - p.selection.changes.length}
+            persisted={p.persisted}
+            proposed={p.proposed}
+            preview={p.selectionPreview}
+            categories={categories}
             version={p.version}
-            viewVersion={compare ? (compare.to === p.version && live ? null : compare.to) : viewVersion}
-            commits={p.commits}
-            playing={playing}
-            hasStaged={staged > 0}
-            onView={(seq) => {
-              setPlaying(false);
-              showVersion(seq === p.version && viewVersion === null ? null : seq);
+            author={author}
+            onReload={p.refresh}
+            onClose={() => setCommitOpen(false)}
+            onCommit={async (input) => {
+              const left = p.staged.length - p.selection.changes.length;
+              const commit = await p.commit(input);
+              setCommitOpen(false);
+              if (left > 0) {
+                flash(`Committed #${commit.seq}: ${commit.reason} · ${left} change${left === 1 ? "" : "s"} still staged`);
+              } else {
+                setTab("history");
+                setHistoryMode("commits");
+                flash(`Committed #${commit.seq}: ${commit.reason}`);
+              }
             }}
-            onPlay={play}
-            onPause={() => setPlaying(false)}
           />
-        </footer>
-      )}
-
-      {timelineShown && details && displayed.deliverables.some((d) => d.id === details.id) && projectId && (
-        <DetailsCard
-          id={details.id}
-          tab={details.tab}
-          onTab={(t) => setDetails({ ...details, tab: t, focusName: false })}
-          focusName={details.focusName}
-          state={displayed}
-          persisted={p.persisted}
-          editable={editable}
-          stagedIds={stagedIds}
-          asOf={asOf}
-          projectId={projectId}
-          hasHistory={showingLive && p.persisted.deliverables.some((d) => d.id === details.id)}
-          refreshKey={recordsKey}
-          onStage={p.stage}
-          onRevert={(id) => p.revert("deliverable", id)}
-          onSelect={(id) => (id ? openDetails(id) : (setSelectedId(null), setDetails(null)))}
-          onProgress={recordProgress}
-          onViewCommit={viewCommit}
-          onOpenMeeting={openMeeting}
-          onClose={() => setDetails(null)}
-        />
-      )}
-      {menu && <ContextMenu request={menu} onClose={() => setMenu(null)} />}
-      {prompt && <QuickPrompt request={prompt} onClose={() => setPrompt(null)} />}
-
-      {commitOpen && (
-        <CommitDialog
-          staged={p.selection.changes}
-          remaining={p.staged.length - p.selection.changes.length}
-          persisted={p.persisted}
-          proposed={p.proposed}
-          preview={p.selectionPreview}
-          categories={categories}
-          version={p.version}
-          author={author}
-          onAuthorChange={setAuthor}
-          onReload={p.refresh}
-          onClose={() => setCommitOpen(false)}
-          onCommit={async (input) => {
-            const left = p.staged.length - p.selection.changes.length;
-            const commit = await p.commit(input);
-            setCommitOpen(false);
-            if (left > 0) {
-              flash(`Committed #${commit.seq}: ${commit.reason} · ${left} change${left === 1 ? "" : "s"} still staged`);
-            } else {
-              setTab("history");
-              setHistoryMode("commits");
-              flash(`Committed #${commit.seq}: ${commit.reason}`);
-            }
-          }}
-        />
-      )}
-      {finishing && (
-        <FinishMeetingDialog
-          meeting={meetings.meetings.find((m) => m.id === finishing.id) ?? finishing}
-          deliverables={p.proposed.deliverables}
-          people={meetings.people}
-          staged={p.selection.changes}
-          persisted={p.persisted}
-          proposed={p.proposed}
-          preview={p.selectionPreview}
-          categories={categories}
-          version={p.version}
-          author={author}
-          onAuthorChange={setAuthor}
-          onReload={p.refresh}
-          onClose={() => setFinishing(null)}
-          onFinish={async ({ author: who, withCommit, reason, category }) => {
-            const m = meetings.meetings.find((x) => x.id === finishing.id) ?? finishing;
-            const items = itemsFromNotes(parseNotes(m.notes, p.proposed.deliverables, m.held_on, meetings.people)).map(({ line: _line, ...item }) => item);
-            const result = await p.finishMeeting(m.id, { author: who, items, commit: withCommit ? { reason, category } : null });
-            await meetings.finished(result.meeting);
-            setFinishing(null);
-            flash(
-              `Finished ${m.title}: ${items.length} item${items.length === 1 ? "" : "s"} recorded` +
-                (result.commit ? `, plan commit #${result.commit.seq}` : ""),
-            );
-          }}
-        />
-      )}
-      {knowledgeOpen && projectId && (
-        <KnowledgeDialog projectId={projectId} projectName={p.project?.name ?? projectId} onClose={() => setKnowledgeOpen(false)} />
-      )}
-      {toast && <div className="toast">{toast}</div>}
+        )}
+        {finishing && (
+          <FinishMeetingDialog
+            meeting={meetings.meetings.find((m) => m.id === finishing.id) ?? finishing}
+            deliverables={p.proposed.deliverables}
+            people={meetings.people}
+            staged={p.selection.changes}
+            persisted={p.persisted}
+            proposed={p.proposed}
+            preview={p.selectionPreview}
+            categories={categories}
+            version={p.version}
+            author={author}
+            onReload={p.refresh}
+            onClose={() => setFinishing(null)}
+            onFinish={async ({ author: who, withCommit, reason, category }) => {
+              const m = meetings.meetings.find((x) => x.id === finishing.id) ?? finishing;
+              const items = itemsFromNotes(parseNotes(m.notes, p.proposed.deliverables, m.held_on, meetings.people)).map(({ line: _line, ...item }) => item);
+              const result = await p.finishMeeting(m.id, { author: who, items, commit: withCommit ? { reason, category } : null });
+              await meetings.finished(result.meeting);
+              setFinishing(null);
+              flash(`Finished ${m.title}: ${items.length} item${items.length === 1 ? "" : "s"} recorded` + (result.commit ? `, plan commit #${result.commit.seq}` : ""));
+            }}
+          />
+        )}
+        {knowledgeOpen && projectId && <KnowledgeDialog projectId={projectId} projectName={currentProject?.name ?? projectId} onClose={() => setKnowledgeOpen(false)} />}
+        {toast && <div className="toast">{toast}</div>}
+      </div>
     </div>
   );
 }

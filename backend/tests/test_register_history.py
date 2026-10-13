@@ -40,7 +40,7 @@ def test_every_change_is_kept_with_who_and_why(client, pid):
     patch(client, pid, item["id"], status="open", note="Slot got cancelled")
     events = history(client, pid, item["id"])
     assert [e["type"] for e in events] == ["raised", "edited", "edited", "closed", "reopened"]
-    assert events[0]["author"] == "Dana"
+    assert events[0]["author"] == "Priya"  # whoever is signed in; the request's "Dana" is ignored
     assert events[1]["line"] == "A-3: due 2026-10-14 → 2026-10-21" and events[1]["note"] == "Comms team is away"
     assert events[2]["line"] == "A-3: owner Priya → Jo; linked to Go-Live"
     assert events[3]["changes"]["outcome"] == [None, "done"] and events[3]["on"] == "2026-10-20"

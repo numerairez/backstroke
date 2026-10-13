@@ -1,5 +1,6 @@
 import type { Deliverable, Phase, PlanEvent, PlanState } from "../types";
 import { daysBetween, formatDate, signedDays } from "../state/dates";
+import { jiraKey } from "../state/jira";
 import { phaseDeltas, samePhases } from "../state/phases";
 
 const FIELD_LABELS: Record<string, string> = {
@@ -103,6 +104,10 @@ export function describeEvents(events: PlanEvent[], states: PlanState[]): EventL
     }
     if (field === "workstream_id") {
       lines.push({ key, text: `${name} lane ${nameOf(states, "workstreams", String(e.old_value))} → ${nameOf(states, "workstreams", String(e.new_value))}` });
+      return;
+    }
+    if (field === "jira_url") {
+      lines.push({ key, text: e.new_value ? `${name} JIRA ${jiraKey(String(e.new_value))}` : `${name} JIRA link removed` });
       return;
     }
     if (field === "name") {

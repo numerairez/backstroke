@@ -12,14 +12,14 @@ from .commands import Change
 ItemKind = Literal["action", "risk", "issue", "decision"]
 
 PREFIX = {"action": "A", "risk": "R", "issue": "I", "decision": "D"}
-# The first status is the open one. Decisions are never edited, only superseded by a later one.
-STATUSES = {"action": ("open", "closed"), "risk": ("open", "closed"), "issue": ("open", "closed"), "decision": ("active", "superseded")}
+# The first status is the open one. Decisions are never edited: a later one supersedes them, or they're withdrawn.
+STATUSES = {"action": ("open", "closed"), "risk": ("open", "closed"), "issue": ("open", "closed"), "decision": ("active", "closed")}
 # Why an item closed. A risk that happened links to the issue it became.
 OUTCOMES = {
     "action": ("done", "dropped"),
     "risk": ("mitigated", "passed", "accepted", "happened"),
     "issue": ("resolved", "accepted"),
-    "decision": ("superseded",),
+    "decision": ("superseded", "withdrawn"),
 }
 MAX_TEXT = 2000
 MAX_NAME = 80
@@ -31,6 +31,7 @@ class Attendee(BaseModel):
 
 
 class PersonInput(BaseModel):
+    id: int | None = None  # keeps the person (and their account) across a rename
     name: str
     groups: list[str] = []
 
@@ -38,6 +39,11 @@ class PersonInput(BaseModel):
 class PeopleRequest(BaseModel):
     people: list[PersonInput]
     groups: list[str] = []  # their order; groups people are in but not listed here go after
+    projects_by_group: dict[str, list[str]] | None = None  # project ids per group; None keeps each group's
+
+
+class ProjectGroupsRequest(BaseModel):
+    groups: list[str]  # names of groups in the organisation
 
 
 class MeetingCreateRequest(BaseModel):
@@ -73,7 +79,7 @@ class MeetingCommit(BaseModel):
 
 
 class FinishMeetingRequest(BaseModel):
-    author: str
+    author: str = ""  # filled in by the server from the signed-in account
     items: list[ItemInput] = Field(default_factory=list)
     commit: MeetingCommit | None = None
 
@@ -151,6 +157,8 @@ def describe_item_event(ref: str, event_type: str, changes: dict[str, Any], deli
         link = (changes.get("link") or [None, None])[1]
         if outcome == "superseded":
             return f"{ref}: superseded by {link}"
+        if outcome == "withdrawn":
+            return f"{ref}: withdrawn"
         if outcome == "happened":
             return f"{ref}: happened, became {link}"
         return f"{ref}: closed as {outcome}" if outcome else f"{ref}: closed"

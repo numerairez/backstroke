@@ -164,15 +164,30 @@ def test_decisions_are_never_edited_only_superseded(client, pid):
     d1 = items["D-1"]
     res = client.patch(f"/api/projects/{pid}/register/{d1['id']}", json={"text": "Go-Live on 6 Nov"})
     assert res.json()["errors"][0]["code"] == "decision_locked"
-    res = client.patch(f"/api/projects/{pid}/register/{d1['id']}", json={"status": "superseded"})
+    res = client.patch(f"/api/projects/{pid}/register/{d1['id']}", json={"outcome": "superseded"})
     assert res.json()["errors"][0]["code"] == "superseded_by_required"
-    res = client.patch(f"/api/projects/{pid}/register/{d1['id']}", json={"status": "superseded", "superseded_by": "D-2"}).json()
-    assert res["status"] == "superseded" and res["superseded_by"] == "D-2"
+    res = client.patch(f"/api/projects/{pid}/register/{d1['id']}", json={"outcome": "superseded", "superseded_by": "D-2"}).json()
+    assert res["status"] == "closed" and res["outcome"] == "superseded" and res["superseded_by"] == "D-2"
     res = client.patch(f"/api/projects/{pid}/register/{d1['id']}", json={"status": "active"})
     assert res.json()["errors"][0]["code"] == "decision_locked"
     # A superseded decision can't supersede another.
-    res = client.patch(f"/api/projects/{pid}/register/{items['D-2']['id']}", json={"status": "superseded", "superseded_by": "D-1"})
+    res = client.patch(f"/api/projects/{pid}/register/{items['D-2']['id']}", json={"outcome": "superseded", "superseded_by": "D-1"})
     assert res.json()["errors"][0]["code"] == "superseded_by_inactive"
+
+
+def test_a_decision_can_be_withdrawn_without_a_replacement(client, pid):
+    d2 = register(client, pid)["D-2"]
+    res = client.patch(f"/api/projects/{pid}/register/{d2['id']}", json={"outcome": "dropped"})
+    assert res.json()["errors"][0]["code"] == "outcome_required"
+    res = client.patch(f"/api/projects/{pid}/register/{d2['id']}", json={"outcome": "withdrawn", "closed_on": "2026-10-10", "note": "Escalation tool moved to phase 2"}).json()
+    assert res["status"] == "closed" and res["outcome"] == "withdrawn" and res["superseded_by"] is None and not res["open"]
+    history = client.get(f"/api/projects/{pid}/register/{d2['id']}/history").json()
+    assert history[-1]["line"] == "D-2: withdrawn" and history[-1]["note"] == "Escalation tool moved to phase 2"
+    # Withdrawn is final, like superseded.
+    res = client.patch(f"/api/projects/{pid}/register/{d2['id']}", json={"status": "active"})
+    assert res.json()["errors"][0]["code"] == "decision_locked"
+    assert "| D-2 |" in client.get(f"/api/projects/{pid}/export/knowledge").text
+    assert "withdrawn 2026-10-10 |" in client.get(f"/api/projects/{pid}/export/knowledge").text
 
 
 def test_export_includes_meetings_and_register(client, pid):

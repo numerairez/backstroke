@@ -22,12 +22,13 @@ FIELD_SPECS: dict[str, dict[str, str]] = {
         "end_date": "date",
         "phases": "phases",
         "finished_on": "optional_date",
+        "jira_url": "optional_url",
     },
     "dependency": {"predecessor_id": "ref", "successor_id": "ref", "type": "dependency_type"},
 }
 FIELD_DEFAULTS: dict[str, dict[str, Any]] = {
     "workstream": {},
-    "deliverable": {"type": "task", "phases": None, "finished_on": None},
+    "deliverable": {"type": "task", "phases": None, "finished_on": None, "jira_url": None},
     "dependency": {"type": "FS"},
 }
 
@@ -80,6 +81,12 @@ def normalize_field(entity_type: str, field: str, value: Any) -> Any:
         return normalize_phases(value)
     if kind == "optional_date":
         return None if value is None else normalize_field_date(field, value)
+    if kind == "optional_url":
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if not isinstance(value, str) or not value.strip().startswith(("http://", "https://")) or " " in value.strip():
+            raise FieldError(f"{field} must be an http(s) link")
+        return value.strip()
     if kind == "deliverable_type":
         if value not in DELIVERABLE_TYPES:
             raise FieldError(f"type must be one of {', '.join(DELIVERABLE_TYPES)}")

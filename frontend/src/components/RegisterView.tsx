@@ -1,11 +1,24 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type ItemUpdate } from "../api/client";
 import { formatDate } from "../state/dates";
 import { groupsOf, membersOf } from "../state/people";
 import { OUTCOMES, type Deliverable, type ItemEvent, type ItemInput, type ItemKind, type Person, type RegisterItem } from "../types";
 
 const KIND_LABEL: Record<ItemKind, string> = { action: "Actions", risk: "Risks", issue: "Issues", decision: "Decisions" };
-const KINDS: ItemKind[] = ["action", "risk", "issue", "decision"];
+/** Card detail, from one line per card to everything: the panel's − and + buttons. */
+const DENSITIES = ["Compact: one line per card", "Two lines per card", "Full detail"];
+const DENSITY_KEY = "backstroke:raidDensity";
+function storedDensity(): number {
+  try {
+    const n = Number(localStorage.getItem(DENSITY_KEY));
+    return Number.isInteger(n) && n >= 0 && n < DENSITIES.length ? n : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** RAID order: risks, actions, issues, decisions. */
+const KINDS: ItemKind[] = ["risk", "action", "issue", "decision"];
 
 const OUTCOME_LABEL: Record<string, string> = {
   done: "Done",
@@ -16,6 +29,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   happened: "Happened",
   resolved: "Resolved",
   superseded: "Superseded",
+  withdrawn: "Withdrawn",
 };
 const OUTCOME_HINT: Record<string, string> = {
   done: "It got done",
@@ -25,6 +39,8 @@ const OUTCOME_HINT: Record<string, string> = {
   accepted: "Living with it",
   happened: "It became an issue",
   resolved: "Fixed",
+  superseded: "A newer decision replaces it",
+  withdrawn: "Reversed, with nothing in its place",
 };
 
 export function KindTag({ kind, children }: { kind: ItemKind; children?: React.ReactNode }) {
@@ -34,7 +50,7 @@ export function KindTag({ kind, children }: { kind: ItemKind; children?: React.R
 export const isOverdue = (item: RegisterItem, today: string) => item.kind === "action" && item.open && !!item.due_on && item.due_on < today;
 
 function statusLabel(item: RegisterItem): string {
-  if (item.status === "superseded") return `Superseded by ${item.superseded_by}`;
+  if (item.outcome === "superseded") return `Superseded by ${item.superseded_by}`;
   if (!item.open) {
     const why = item.outcome ? OUTCOME_LABEL[item.outcome] : "Closed";
     return item.became ? `${why}, became ${item.became}` : `${why}${item.closed_on ? ` ${formatDate(item.closed_on)}` : ""}`;
@@ -69,7 +85,11 @@ export function ItemRow({ item, deliverables, today, showMeeting = true, onSelec
       </div>
       <div className="reg-meta muted small">
         {item.owner && <span>{item.owner}</span>}
-        {item.due_on && <span className={overdue ? "overdue" : ""}>{overdue ? "Overdue since" : "Due"} {formatDate(item.due_on)}</span>}
+        {item.due_on && (
+          <span className={overdue ? "overdue" : ""}>
+            {overdue ? "Overdue since" : "Due"} {formatDate(item.due_on)}
+          </span>
+        )}
         {item.deliverable_ids.length ? (
           item.deliverable_ids.map((id) => (
             <button key={id} className="deliv-chip" onClick={() => onSelectDeliverable(id)} disabled={!deliverables.has(id)}>
@@ -100,19 +120,30 @@ interface Props {
   onUpdate: (itemId: number, input: ItemUpdate) => Promise<RegisterItem>;
 }
 
+const KIND_HINT: Record<ItemKind, string> = { action: "Someone has to do it", risk: "Might go wrong", issue: "Already going wrong", decision: "Agreed and on record" };
+const KIND_EMPTY: Record<ItemKind, string> = { action: "No open actions", risk: "No open risks", issue: "No open issues", decision: "No active decisions" };
+
+/** The register as a board: one row per kind in RAID order, its cards side by side, each row with its own add button. */
 export function RegisterView(props: Props) {
-  const [kind, setKind] = useState<ItemKind | "all">("all");
   const [openOnly, setOpenOnly] = useState(true);
+  const [density, setDensityState] = useState(storedDensity);
+  const setDensity = (n: number) => {
+    setDensityState(n);
+    try {
+      localStorage.setItem(DENSITY_KEY, String(n));
+    } catch {
+      /* ignore */
+    }
+  };
   const [owner, setOwner] = useState("");
   const [query, setQuery] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<ItemKind | null>(null);
   const [expanded, setExpanded] = useState<{ id: number; closing: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const byId = useMemo(() => new Map(props.deliverables.map((d) => [d.id, d])), [props.deliverables]);
   const groups = groupsOf(props.people);
   const author = props.author.trim() || undefined;
 
-  const overdue = props.register.filter((i) => isOverdue(i, props.today)).length;
   // A group matches items owned by the group or by anyone in it.
   const owners = useMemo(() => {
     if (!owner) return null;
@@ -121,25 +152,13 @@ export function RegisterView(props: Props) {
   }, [owner, props.people]);
   const ownerNames = [...new Set([...props.people.map((p) => p.name), ...props.register.flatMap((i) => (i.owner ? [i.owner] : []))])].filter((n) => !groups.includes(n));
   const q = query.trim().toLowerCase();
+  const filtering = !!owners || !!q;
   const shown = props.register
-    .filter(
-      (i) =>
-        (kind === "all" || i.kind === kind) &&
-        (!openOnly || i.open) &&
-        (!owners || owners.has((i.owner ?? "").toLowerCase())) &&
-        (!q || `${i.ref} ${i.text} ${i.owner ?? ""}`.toLowerCase().includes(q)),
-    )
-    .sort((a, b) => Number(isOverdue(b, props.today)) - Number(isOverdue(a, props.today)) || b.id - a.id);
+    .filter((i) => (!openOnly || i.open) && (!owners || owners.has((i.owner ?? "").toLowerCase())) && (!q || `${i.ref} ${i.text} ${i.owner ?? ""}`.toLowerCase().includes(q)))
+    .sort((a, b) => Number(b.open) - Number(a.open) || Number(isOverdue(b, props.today)) - Number(isOverdue(a, props.today)) || b.id - a.id);
   const activeDecisions = props.register.filter((i) => i.kind === "decision" && i.open);
   const openIssues = props.register.filter((i) => i.kind === "issue" && i.open);
-  const counts = (k: ItemKind) => props.register.filter((i) => i.kind === k && i.open).length;
   const closed = props.register.filter((i) => !i.open).length;
-  const summary = [
-    [counts("action"), "open action"],
-    [counts("risk"), "open risk"],
-    [counts("issue"), "open issue"],
-    [counts("decision"), "active decision"],
-  ] as const;
 
   const run = async (f: () => Promise<unknown>) => {
     setError(null);
@@ -152,46 +171,21 @@ export function RegisterView(props: Props) {
     }
   };
   const update = (item: RegisterItem, input: ItemUpdate) => run(() => props.onUpdate(item.id, { ...input, author }));
-  const toggle = (item: RegisterItem, closing = false) =>
-    setExpanded((x) => (x?.id === item.id && x.closing === closing ? null : { id: item.id, closing }));
+  const toggle = (item: RegisterItem, closing = false) => setExpanded((x) => (x?.id === item.id && x.closing === closing ? null : { id: item.id, closing }));
 
   return (
     <div className="page">
-      <div className="page-inner wide register">
-        <header className="page-head">
-          <div>
-            <h2>Register</h2>
-            <p className="muted">
-              {summary.map(([n, label]) => `${n} ${label}${n === 1 ? "" : "s"}`).join(" · ")}
-              {overdue > 0 && <span className="overdue-text"> · {overdue} overdue</span>}
-              {closed > 0 && <> · {closed} closed</>}
-            </p>
-          </div>
-          <span className="spacer" />
-          {!adding && (
-            <button className="primary" onClick={() => setAdding(true)}>
-              + Add item
-            </button>
-          )}
-        </header>
-
-        {adding && (
-          <AddItemForm
-            deliverables={props.deliverables}
-            people={props.people}
-            onCancel={() => setAdding(false)}
-            onAdd={(input) => run(async () => (await props.onCreate({ ...input, author }), setAdding(false)))}
-          />
-        )}
-
+      <div className={`page-inner wide register density-${density}`}>
         <div className="reg-toolbar">
-          <div className="seg-toggle" role="group" aria-label="Show">
-            {(["all", ...KINDS] as const).map((k) => (
-              <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>
-                {k === "all" ? "All" : KIND_LABEL[k]}
-              </button>
-            ))}
-          </div>
+          <h2 className="reg-title">RAID</h2>
+          <input
+            className="small search"
+            type="search"
+            placeholder="Search the register"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search the register"
+          />
           <select className="small" value={owner} aria-label="Owner" onChange={(e) => setOwner(e.target.value)}>
             <option value="">Any owner</option>
             {groups.length > 0 && (
@@ -211,114 +205,141 @@ export function RegisterView(props: Props) {
               ))}
             </optgroup>
           </select>
-          <input className="small search" type="search" placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search the register" />
           <label className="toggle small">
             <input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} /> Open only
+            {openOnly && closed > 0 && <span className="muted">({closed} closed hidden)</span>}
           </label>
+          <div className="zoom reg-density" role="group" aria-label="Card detail">
+            <button className="icon" disabled={density === 0} onClick={() => setDensity(density - 1)} title={`Less detail (${DENSITIES[Math.max(0, density - 1)]})`}>
+              −
+            </button>
+            <button
+              className="icon"
+              disabled={density === DENSITIES.length - 1}
+              onClick={() => setDensity(density + 1)}
+              title={`More detail (${DENSITIES[Math.min(DENSITIES.length - 1, density + 1)]})`}
+            >
+              +
+            </button>
+          </div>
         </div>
         {error && <p className="callout error small">{error}</p>}
 
-        {shown.length === 0 ? (
-          <p className="hint">
-            {props.register.length === 0
-              ? "Nothing in the register yet. Actions, risks, issues and decisions from meeting notes land here when a meeting finishes."
-              : "Nothing matches. Untick Open only to see closed items."}
-          </p>
-        ) : (
-          <div className="table-wrap">
-            <table className="reg-table">
-              <thead>
-                <tr>
-                  <th>Ref</th>
-                  <th>What</th>
-                  <th>Owner</th>
-                  <th>Due</th>
-                  <th>Deliverables</th>
-                  <th>Raised in</th>
-                  <th>Status</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((item) => {
-                  const late = isOverdue(item, props.today);
-                  const open = expanded?.id === item.id;
-                  return (
-                    <Fragment key={item.id}>
-                      <tr className={`${item.open ? "" : "closed"} ${late ? "overdue" : ""} ${open ? "expanded" : ""}`}>
-                        <td>
-                          <button className="ref-btn" aria-expanded={open} title={`History of ${item.ref}`} onClick={() => toggle(item)}>
-                            <span className="chevron" aria-hidden="true">
-                              {open ? "▾" : "▸"}
-                            </span>
-                            <KindTag kind={item.kind}>{item.ref}</KindTag>
-                          </button>
-                        </td>
-                        <td className="reg-text">
-                          {item.text}
-                          {item.raised_from.length > 0 && <span className="muted small"> · from {item.raised_from.join(", ")}</span>}
-                        </td>
-                        <td>{item.owner ?? <span className="muted">—</span>}</td>
-                        <td className={late ? "overdue-text" : ""}>{item.due_on ? formatDate(item.due_on) : <span className="muted">—</span>}</td>
-                        <td>
-                          {item.deliverable_ids.length ? (
-                            item.deliverable_ids.map((id) => (
-                              <button key={id} className="deliv-chip" onClick={() => props.onSelectDeliverable(id)} disabled={!byId.has(id)}>
-                                {byId.get(id)?.name ?? "removed deliverable"}
-                              </button>
-                            ))
-                          ) : (
-                            <span className="programme muted">Programme</span>
-                          )}
-                        </td>
-                        <td className="muted">{item.meeting ? meetingLabel(item.meeting) : "Register"}</td>
-                        <td>
-                          <span className={`reg-status ${item.open ? "" : "closed"} ${item.outcome ?? ""}`}>{statusLabel(item)}</span>
-                        </td>
-                        <td className="row-actions-cell">
-                          {item.kind === "action" && item.open && (
-                            <button className="small" onClick={() => update(item, { outcome: "done", closed_on: props.today })}>
-                              Mark done
+        <div className="reg-board">
+          {KINDS.map((k) => {
+            const items = shown.filter((i) => i.kind === k);
+            const open = props.register.filter((i) => i.kind === k && i.open).length;
+            const late = k === "action" ? props.register.filter((i) => isOverdue(i, props.today)).length : 0;
+            return (
+              <section key={k} className={`reg-col ${k}`} aria-label={KIND_LABEL[k]}>
+                <header className="reg-col-head">
+                  <div className="reg-col-title">
+                    <h3>
+                      {KIND_LABEL[k]} <span className="reg-col-count">{open}</span>
+                      {late > 0 && <span className="nav-badge overdue">{late} overdue</span>}
+                    </h3>
+                    <span className="muted small reg-col-hint">{KIND_HINT[k]}</span>
+                  </div>
+                  <button
+                    className="icon small"
+                    title={`Add ${KIND_LABEL[k].toLowerCase().slice(0, -1)}`}
+                    aria-label={`Add ${KIND_LABEL[k].toLowerCase().slice(0, -1)}`}
+                    onClick={() => setAdding(adding === k ? null : k)}
+                  >
+                    +
+                  </button>
+                </header>
+                <div className="reg-row-body">
+                  {adding === k && (
+                    <AddItemForm
+                      kind={k}
+                      deliverables={props.deliverables}
+                      people={props.people}
+                      onCancel={() => setAdding(null)}
+                      onAdd={(input) => run(async () => (await props.onCreate({ ...input, author }), setAdding(null)))}
+                    />
+                  )}
+                  {items.length === 0 ? (
+                    adding !== k && <p className="reg-col-empty muted small">{filtering ? "Nothing matches" : openOnly ? KIND_EMPTY[k] : "Nothing yet"}</p>
+                  ) : (
+                    <ul className="reg-cards" aria-label={KIND_LABEL[k]}>
+                      {items.map((item) => {
+                        const overdue = isOverdue(item, props.today);
+                        const isOpen = expanded?.id === item.id;
+                        return (
+                          <li key={item.id} className={`reg-card ${item.open ? "" : "closed"} ${overdue ? "overdue" : ""} ${isOpen ? "expanded" : ""}`}>
+                            <button
+                              className="reg-card-main"
+                              aria-expanded={isOpen}
+                              title={
+                                isOpen ? "Hide history" : `${item.text}\n\n${item.meeting ? meetingLabel(item.meeting) : "Added in the register"} · click for history and edit`
+                              }
+                              onClick={() => toggle(item)}
+                            >
+                              <span className="reg-card-top">
+                                <KindTag kind={item.kind}>{item.ref}</KindTag>
+                                {(!item.open || item.outcome) && <span className={`reg-status ${item.open ? "" : "closed"} ${item.outcome ?? ""}`}>{statusLabel(item)}</span>}
+                                {overdue && <span className="reg-status overdue-text">Overdue</span>}
+                              </span>
+                              <span className="reg-text">{item.text}</span>
                             </button>
-                          )}
-                          {item.open && (item.kind !== "decision" || activeDecisions.length > 1) && (
-                            <button className="small" aria-pressed={open && expanded.closing} onClick={() => toggle(item, true)}>
-                              {item.kind === "decision" ? "Superseded by…" : "Close…"}
-                            </button>
-                          )}
-                          {!item.open && item.kind !== "decision" && (
-                            <button className="small" onClick={() => update(item, { status: "open" })}>
-                              Reopen
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                      {open && (
-                        <tr className="reg-detail">
-                          <td colSpan={8}>
-                            <ItemDetail
-                              key={`${item.id}-${expanded.closing}`}
-                              projectId={props.projectId}
-                              item={item}
-                              closing={expanded.closing && item.open}
-                              deliverables={props.deliverables}
-                              people={props.people}
-                              today={props.today}
-                              decisions={activeDecisions.filter((d) => d.id !== item.id)}
-                              issues={openIssues}
-                              onUpdate={(input) => update(item, input)}
-                              onDone={() => setExpanded({ id: item.id, closing: false })}
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                            <div className="reg-card-meta small">
+                              {item.owner && <span className="reg-owner">{item.owner}</span>}
+                              {item.due_on && <span className={overdue ? "overdue-text" : "muted"}>Due {formatDate(item.due_on)}</span>}
+                              {item.deliverable_ids.map((id) => (
+                                <button key={id} className="deliv-chip" onClick={() => props.onSelectDeliverable(id)} disabled={!byId.has(id)}>
+                                  {byId.get(id)?.name ?? "removed deliverable"}
+                                </button>
+                              ))}
+                              {item.deliverable_ids.length === 0 && <span className="programme muted">Programme</span>}
+                              <span className="reg-card-actions">
+                                {item.kind === "action" && item.open && (
+                                  <button className="small" onClick={() => update(item, { outcome: "done", closed_on: props.today })}>
+                                    Done
+                                  </button>
+                                )}
+                                {item.open && (
+                                  <button className="small" aria-pressed={isOpen && expanded.closing} onClick={() => toggle(item, true)}>
+                                    Close…
+                                  </button>
+                                )}
+                                {!item.open && item.kind !== "decision" && (
+                                  <button className="small" onClick={() => update(item, { status: "open" })}>
+                                    Reopen
+                                  </button>
+                                )}
+                              </span>
+                            </div>
+                            {(isOpen || density === DENSITIES.length - 1) && (
+                              <div className="muted small reg-raised" title={item.raised_from.length ? `From ${item.raised_from.join(", ")}` : undefined}>
+                                {item.meeting ? meetingLabel(item.meeting) : "Added in the register"}
+                              </div>
+                            )}
+                            {isOpen && (
+                              <ItemDetail
+                                key={`${item.id}-${expanded.closing}`}
+                                projectId={props.projectId}
+                                item={item}
+                                closing={expanded.closing && item.open}
+                                deliverables={props.deliverables}
+                                people={props.people}
+                                today={props.today}
+                                decisions={activeDecisions.filter((d) => d.id !== item.id)}
+                                issues={openIssues}
+                                onUpdate={(input) => update(item, input)}
+                                onDone={() => setExpanded({ id: item.id, closing: false })}
+                              />
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              </section>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -361,7 +382,13 @@ function ItemDetail(props: DetailProps) {
     <div className="item-detail">
       {props.closing && <CloseForm {...props} />}
       {editing ? (
-        <EditForm item={item} deliverables={props.deliverables} people={props.people} onCancel={() => setEditing(false)} onSave={async (input) => (await props.onUpdate(input)) && setEditing(false)} />
+        <EditForm
+          item={item}
+          deliverables={props.deliverables}
+          people={props.people}
+          onCancel={() => setEditing(false)}
+          onSave={async (input) => (await props.onUpdate(input)) && setEditing(false)}
+        />
       ) : (
         !props.closing &&
         item.kind !== "decision" && (
@@ -395,7 +422,7 @@ function ItemDetail(props: DetailProps) {
 function CloseForm(props: DetailProps) {
   const { item } = props;
   const outcomes = OUTCOMES[item.kind];
-  const [outcome, setOutcome] = useState(item.kind === "decision" ? "superseded" : "");
+  const [outcome, setOutcome] = useState("");
   const [link, setLink] = useState(""); // the newer decision, or the issue a risk became ("" raises a new one)
   const [closedOn, setClosedOn] = useState(props.today);
   const [note, setNote] = useState("");
@@ -416,7 +443,21 @@ function CloseForm(props: DetailProps) {
 
   return (
     <form className="close-form" onSubmit={submit}>
-      {item.kind === "decision" ? (
+      <fieldset className="outcomes">
+        <legend>Why is {item.ref} closing?</legend>
+        {outcomes.map((o) => {
+          // Superseding needs another active decision to point at.
+          const unavailable = o === "superseded" && props.decisions.length === 0;
+          return (
+            <label key={o} className={`outcome ${outcome === o ? "chosen" : ""} ${unavailable ? "unavailable" : ""}`}>
+              <input type="radio" name={`outcome-${item.id}`} value={o} checked={outcome === o} disabled={unavailable} onChange={() => (setOutcome(o), setLink(""))} />
+              <strong>{OUTCOME_LABEL[o]}</strong>
+              <span className="muted small">{unavailable ? "Record the newer decision first" : OUTCOME_HINT[o]}</span>
+            </label>
+          );
+        })}
+      </fieldset>
+      {outcome === "superseded" && (
         <label className="field">
           <span>Superseded by</span>
           <select autoFocus value={link} onChange={(e) => setLink(e.target.value)}>
@@ -428,17 +469,6 @@ function CloseForm(props: DetailProps) {
             ))}
           </select>
         </label>
-      ) : (
-        <fieldset className="outcomes">
-          <legend>Why is {item.ref} closing?</legend>
-          {outcomes.map((o) => (
-            <label key={o} className={`outcome ${outcome === o ? "chosen" : ""}`}>
-              <input type="radio" name={`outcome-${item.id}`} value={o} checked={outcome === o} onChange={() => setOutcome(o)} />
-              <strong>{OUTCOME_LABEL[o]}</strong>
-              <span className="muted small">{OUTCOME_HINT[o]}</span>
-            </label>
-          ))}
-        </fieldset>
       )}
       {outcome === "happened" && (
         <label className="field">
@@ -456,7 +486,11 @@ function CloseForm(props: DetailProps) {
       <div className="field-row">
         <label className="field">
           <span>Why (optional)</span>
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={item.kind === "risk" ? "e.g. Vendor confirmed schema v3" : "Kept in its history"} />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={item.kind === "risk" ? "e.g. Vendor confirmed schema v3" : outcome === "withdrawn" ? "e.g. Escalation tool moved to phase 2" : "Kept in its history"}
+          />
         </label>
         <label className="field narrow">
           <span>On</span>
@@ -572,8 +606,15 @@ function EditForm(props: { item: RegisterItem; deliverables: Deliverable[]; peop
   );
 }
 
-function AddItemForm(props: { deliverables: Deliverable[]; people: Person[]; onAdd: (input: ItemInput) => void; onCancel: () => void }) {
-  const [kind, setKind] = useState<ItemKind>("action");
+const ADD_PLACEHOLDER: Record<ItemKind, string> = {
+  action: "e.g. Book the go-live comms slot",
+  risk: "e.g. Vendor may slip the schema release",
+  issue: "e.g. Test environment is down",
+  decision: "e.g. Go-live moves to the weekend",
+};
+
+function AddItemForm(props: { kind: ItemKind; deliverables: Deliverable[]; people: Person[]; onAdd: (input: ItemInput) => void; onCancel: () => void }) {
+  const { kind } = props;
   const [text, setText] = useState("");
   const [owner, setOwner] = useState("");
   const [due, setDue] = useState("");
@@ -581,38 +622,21 @@ function AddItemForm(props: { deliverables: Deliverable[]; people: Person[]; onA
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim()) return;
-    props.onAdd({
-      kind,
-      text: text.trim(),
-      owner: owner.trim() || null,
-      due_on: kind === "action" && due ? due : null,
-      deliverable_ids: deliverable ? [deliverable] : [],
-    });
+    props.onAdd({ kind, text: text.trim(), owner: owner.trim() || null, due_on: kind === "action" && due ? due : null, deliverable_ids: deliverable ? [deliverable] : [] });
   };
   return (
     <form className="reg-add card" onSubmit={submit}>
-      <div className="field-row">
-        <label className="field">
-          <span>Type</span>
-          <select value={kind} onChange={(e) => setKind(e.target.value as ItemKind)}>
-            <option value="action">Action</option>
-            <option value="risk">Risk: might go wrong</option>
-            <option value="issue">Issue: already going wrong</option>
-            <option value="decision">Decision</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Owner</span>
-          <OwnerInput value={owner} onChange={setOwner} people={props.people} />
-        </label>
-      </div>
       <label className="field">
         <span>
           What <em>required</em>
         </span>
-        <input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Book the go-live comms slot" />
+        <input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={ADD_PLACEHOLDER[kind]} />
       </label>
       <div className="field-row">
+        <label className="field">
+          <span>Owner</span>
+          <OwnerInput value={owner} onChange={setOwner} people={props.people} />
+        </label>
         <label className="field">
           <span>Deliverable</span>
           <select value={deliverable} onChange={(e) => setDeliverable(e.target.value)}>

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..persistence.db import Base
@@ -112,6 +112,7 @@ class DeliverableState(Base):
     end_date: Mapped[str] = mapped_column(String)
     phases: Mapped[list | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     finished_on: Mapped[str | None] = mapped_column(String, nullable=True)
+    jira_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class DependencyState(Base):
@@ -200,26 +201,62 @@ class RegisterEvent(Base):
     created_at: Mapped[str] = mapped_column(String)
 
 
-class Person(Base):
-    """Someone on the project, for picking attendees and owners. `groups` names the teams they're in, such as "Data"."""
+# --- The organisation: people and teams, shared by every project -------------------------
 
-    __tablename__ = "project_people"
-    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+class Person(Base):
+    """Someone in the organisation. `groups` names the teams they're in, such as "Data"."""
+
+    __tablename__ = "people"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    name: Mapped[str] = mapped_column(String)
+    name: Mapped[str] = mapped_column(String, unique=True)
     groups: Mapped[list] = mapped_column(JSON, default=list)
     position: Mapped[int] = mapped_column(Integer)
 
 
 class PersonGroup(Base):
-    """A team on the project. People join any number of them; a group can be empty."""
+    """A team. People join any number of them; a group can be empty."""
 
-    __tablename__ = "project_groups"
-    __table_args__ = (UniqueConstraint("project_id", "name"),)
+    __tablename__ = "person_groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    name: Mapped[str] = mapped_column(String)
+    name: Mapped[str] = mapped_column(String, unique=True)
     position: Mapped[int] = mapped_column(Integer)
+
+
+class ProjectTeam(Base):
+    """A group working on a project. Everyone in it is a member: offered as an attendee or owner
+    there, and shown the project in their sidebar."""
+
+    __tablename__ = "project_teams"
+
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("person_groups.id", ondelete="CASCADE"), primary_key=True)
+
+
+# --- Sign-in: accounts belong to people in the organisation ---------------------------
+
+
+class Account(Base):
+    """A person's sign-in. Only someone already listed in People can register one; the first is an admin."""
+
+    __tablename__ = "accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("people.id", ondelete="CASCADE"), unique=True)
+    email: Mapped[str] = mapped_column(String, unique=True)
+    password_hash: Mapped[str] = mapped_column(String)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[str] = mapped_column(String)
+
+
+class LoginSession(Base):
+    """A signed-in browser. Only a hash of the cookie's token is stored."""
+
+    __tablename__ = "login_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[str] = mapped_column(String)
+    expires_at: Mapped[str] = mapped_column(String)

@@ -210,11 +210,336 @@ h4 {
 
 /* ---------- Layout ---------- */
 
+/* The shell: the project sidebar on the left, the open project (or Settings) beside it. */
+.shell {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  height: 100%;
+}
+.shell.nav-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
 .app {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.project-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 10px;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+}
+.project-nav.collapsed {
+  align-items: center;
+  gap: 8px;
+  padding: 10px 6px;
+}
+.nav-head {
+  display: flex;
+  align-items: center;
+  padding: 2px 4px 0 6px;
+}
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+.nav-expand {
+  border: none;
+  background: none;
+  padding: 4px;
+}
+.nav-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+button.nav-toggle {
+  border: none;
+  background: none;
+  text-align: left;
+  padding-top: 2px;
+  border-radius: 6px;
+}
+button.nav-toggle:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+.nav-caret {
+  display: inline-block;
+  width: 12px;
+  font-size: 12px;
+}
+.nav-projects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nav-project {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 5px 8px;
+  border-radius: 7px;
+  text-align: left;
+  color: var(--text-2);
+}
+.nav-project:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.nav-project.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.collapsed .nav-project {
+  padding: 4px;
+  justify-content: center;
+}
+.nav-initials {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.nav-project.active .nav-initials {
+  background: var(--accent);
+  color: var(--surface);
+}
+.nav-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-empty {
+  margin: 0;
+  padding: 0 8px;
+}
+.nav-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.nav-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  padding: 6px 8px;
+  border-radius: 7px;
+  color: var(--text-2);
+  text-align: left;
+}
+.nav-settings .muted {
+  margin-left: auto;
+}
+.nav-settings:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.nav-settings.active,
+.nav-icon.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.nav-you {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 8px;
+}
+.nav-you select {
+  width: 100%;
+}
+.nav-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+}
+
+/* Settings → Projects */
+.project-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  gap: 16px;
+  margin-top: 14px;
+  align-items: start;
+}
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.project-card.new {
+  border-style: dashed;
+}
+.project-card textarea {
+  width: 100%;
+  resize: vertical;
+}
+.project-name-input {
+  font-size: 15px;
+  font-weight: 600;
+  border-color: transparent;
+  background: none;
+  padding-left: 4px;
+  margin-left: -5px;
+  min-width: 0;
+  flex: 1;
+}
+.project-name-input:hover,
+.project-name-input:focus {
+  border-color: var(--border-strong);
+}
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.project-chip {
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+.project-members {
+  margin: -4px 0 0;
+}
+fieldset.bare {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.card-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.read-only-note {
+  align-self: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.signin-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 200px;
+}
+.signin-cell > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.nav-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 8px;
+}
+.nav-account-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.25;
+}
+.nav-account-who > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sign-in page */
+.signin {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background: var(--bg);
+}
+.signin-card {
+  width: min(400px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 28px 22px;
+  box-shadow: var(--shadow);
+}
+.signin-card h1 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  letter-spacing: -0.015em;
+}
+.signin-card > p {
+  margin: 0;
+}
+.signin-card input {
+  width: 100%;
+}
+.signin-brand {
+  font-size: 20px;
+}
+.signin-mode {
+  align-self: flex-start;
+}
+.signin-submit {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+.empty-project {
+  text-align: center;
+  padding-top: 80px;
 }
 
 .topbar {
@@ -233,25 +558,24 @@ h4 {
   min-width: 0;
   flex-wrap: wrap;
 }
-.brand {
+.project-title {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 10px;
-  font-weight: 700;
-  font-size: 22px;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+  min-width: 0;
 }
-.tagline {
-  margin-left: 6px;
-  font-size: 14px;
-  font-weight: 400;
-  letter-spacing: 0;
-  color: var(--muted);
+.project-title h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  white-space: nowrap;
 }
-.project-select {
-  font-weight: 600;
-  max-width: 220px;
+.project-title .muted {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .versions {
   display: flex;
@@ -306,8 +630,87 @@ h4 {
   min-width: 0;
   min-height: 0;
 }
+/* Swimlanes on top, the register below, split by a draggable line. Until it's dragged the register takes the room its rows need. */
+.plan-main {
+  overflow: hidden;
+}
 .plan-main > .timeline-wrap {
+  flex: 1 1 auto;
+  min-height: 160px;
+}
+.register-pane {
+  flex: none;
+  max-height: 70%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.register-pane.sized {
+  max-height: none;
+}
+.register-pane > .page {
   flex: 1;
+}
+.register-pane .page-inner.wide {
+  max-width: none;
+  padding: 10px 16px 16px;
+}
+.register-resizer {
+  flex: none;
+  position: relative;
+  height: 7px;
+  margin-top: -3px;
+  cursor: row-resize;
+  z-index: 4;
+  touch-action: none;
+  border-bottom: 1px solid var(--border);
+}
+.register-resizer::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.register-resizer:hover::after,
+.register-resizer:focus-visible::after,
+body.resizing.rows .register-resizer::after {
+  background: var(--accent);
+}
+body.resizing.rows {
+  cursor: row-resize;
+}
+
+.topbar-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-account-who {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  font-size: 13px;
+}
+.project-extras {
+  margin-top: 14px;
+}
+.project-extras p {
+  margin: 4px 0 10px;
+}
+a.button-link {
+  display: inline-block;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  text-decoration: none;
+}
+a.button-link:hover {
+  background: var(--surface-3);
 }
 .timeline-wrap {
   position: relative;
@@ -394,6 +797,9 @@ footer {
 }
 
 @media (max-width: 900px) {
+  .reg-col {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .workspace {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(300px, 1fr) minmax(260px, 45%);
@@ -414,8 +820,7 @@ footer {
     grid-template-columns: minmax(0, 1fr) !important;
   }
   .versions,
-  .tagline,
-  .topbar .small.secondary {
+  .project-description {
     display: none;
   }
   .playback {
@@ -836,6 +1241,19 @@ footer {
 }
 .static {
   padding: 5px 0;
+}
+.jira-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.jira-field input {
+  flex: 1;
+  min-width: 0;
+}
+.jira-field a {
+  white-space: nowrap;
 }
 .staged-note {
   display: flex;
@@ -3101,6 +3519,271 @@ button.done-btn:hover:not(:disabled) {
   padding: 4px 16px 14px 34px;
 }
 
+/* Register board: one column per kind */
+.register .reg-toolbar {
+  margin: 0 0 12px;
+}
+.reg-title {
+  margin: 0 8px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+}
+.reg-board {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* One row per kind: its name on the left, its cards side by side. */
+.reg-col {
+  --kind: var(--accent);
+  --kind-bg: var(--accent-bg);
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--kind);
+}
+.reg-row-body {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  overflow-x: auto;
+  min-width: 0;
+  padding-bottom: 2px;
+}
+.reg-col.risk {
+  --kind: var(--warn);
+  --kind-bg: var(--warn-bg);
+}
+.reg-col.issue {
+  --kind: var(--error);
+  --kind-bg: var(--error-bg);
+}
+.reg-col.decision {
+  --kind: var(--decision);
+  --kind-bg: var(--decision-bg);
+}
+.reg-col-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.reg-col-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.reg-col-title h3 {
+  margin: 0;
+  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.reg-col-count {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--kind-bg);
+  color: var(--kind);
+  line-height: 18px;
+}
+.reg-col-head .icon {
+  color: var(--kind);
+  font-size: 16px;
+  font-weight: 600;
+}
+.reg-col-empty {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+}
+.reg-col .reg-add {
+  flex: 0 0 340px;
+  background: var(--surface);
+}
+.reg-col .reg-add .modal-actions {
+  margin-top: 4px;
+}
+.reg-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.reg-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  flex: 0 0 260px;
+  min-width: 0;
+}
+.reg-card.expanded {
+  flex-basis: 380px;
+}
+/* Collapsed, a card is two lines: ref and text, then owner, due, deliverables and actions. */
+.reg-card:not(.expanded) .reg-card-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.reg-card:not(.expanded) .reg-card-top {
+  flex: none;
+}
+.reg-card:not(.expanded) .reg-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reg-card:hover,
+.reg-card.expanded {
+  border-color: var(--border-strong);
+}
+.reg-card.overdue {
+  box-shadow: inset 3px 0 var(--error);
+}
+.reg-card.closed {
+  background: transparent;
+}
+.reg-card.closed .reg-text {
+  color: var(--muted);
+}
+.reg-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.reg-card-main:hover:not(:disabled) {
+  background: none;
+}
+.reg-card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.reg-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 22px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.reg-card-meta .deliv-chip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reg-owner {
+  font-weight: 600;
+}
+.reg-raised {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Card buttons appear on hover or focus, and stay out of the way otherwise. */
+.reg-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.reg-card:hover .reg-card-actions,
+.reg-card:focus-within .reg-card-actions,
+.reg-card.expanded .reg-card-actions {
+  opacity: 1;
+}
+@media (hover: none) {
+  .reg-card-actions {
+    opacity: 1;
+  }
+}
+.reg-card-actions button.small {
+  padding: 1px 7px;
+}
+.reg-density {
+  margin-left: auto;
+}
+.reg-toolbar .zoom .icon {
+  padding: 1px 8px;
+}
+/* Compact: one line per card, row labels without their hint. */
+.register.density-0 .reg-card:not(.expanded) .reg-card-meta,
+.register.density-0 .reg-col-hint {
+  display: none;
+}
+.register.density-0 .reg-card {
+  padding: 4px 8px;
+}
+.register.density-0 .reg-col {
+  padding: 4px 10px;
+}
+/* Full detail: text and meta wrap, and the card says where it was raised. */
+.register.density-2 .reg-card:not(.expanded) .reg-card-main {
+  flex-direction: column;
+  align-items: stretch;
+}
+.register.density-2 .reg-card:not(.expanded) .reg-text {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+.register.density-2 .reg-card-meta {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+.register.density-2 .reg-card {
+  flex-basis: 300px;
+}
+.register.density-2 .reg-card.expanded {
+  flex-basis: 380px;
+}
+.reg-card .item-detail {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.reg-card .close-form,
+.reg-card .edit-form {
+  padding: 8px;
+}
+.reg-card .outcome {
+  min-width: 0;
+  flex: 1 1 100%;
+}
+
 /* An item's history and the forms to close or edit it */
 .item-detail {
   display: flex;
@@ -3205,6 +3888,10 @@ button.done-btn:hover:not(:disabled) {
 .outcome:focus-within {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+.outcome.unavailable {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .outcome.chosen {
   border-color: var(--accent);

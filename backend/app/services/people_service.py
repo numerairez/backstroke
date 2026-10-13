@@ -1,6 +1,9 @@
-"""The project's people and groups: who can be picked as an attendee or owner, and the teams they're in.
+"""The organisation's people and groups, and which groups work on which project.
 
-A person can be in any number of groups, and a group can be empty. The roster is saved whole.
+People and groups belong to the organisation, not to a project: someone is listed once, in any
+number of groups (teams such as "Data"). A project takes groups, and its members are everyone in
+them, which is who it offers as attendees and owners. The organisation roster is saved whole.
+
 Attendees and owners stay plain names, so renaming or removing someone here never rewrites a
 meeting or the register.
 """
@@ -13,16 +16,66 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..domain.meetings import MAX_NAME, PersonInput
-from ..domain.models import Person, PersonGroup
+from ..domain.models import Person, PersonGroup, Project, ProjectTeam
 from .commit_service import require_project
 from .meeting_service import fail
 
 
+def _people(session: Session) -> list[Person]:
+    return list(session.scalars(select(Person).order_by(Person.position)))
+
+
+def _group_names(session: Session) -> list[str]:
+    return list(session.scalars(select(PersonGroup.name).order_by(PersonGroup.position)))
+
+
+def _projects_by_group(session: Session) -> dict[str, list[str]]:
+    """Group name -> the projects it works on, oldest project first."""
+    out: dict[str, list[str]] = {}
+    rows = session.execute(
+        select(PersonGroup.name, ProjectTeam.project_id)
+        .join(ProjectTeam, ProjectTeam.group_id == PersonGroup.id)
+        .join(Project, Project.id == ProjectTeam.project_id)
+        .order_by(Project.created_at, Project.name)
+    )
+    for group, project_id in rows:
+        out.setdefault(group, []).append(project_id)
+    return out
+
+
+def project_groups(session: Session, project_id: str) -> list[str]:
+    """The groups working on a project, in the organisation's order."""
+    on = {g for g, projects in _projects_by_group(session).items() if project_id in projects}
+    return [g for g in _group_names(session) if g in on]
+
+
+def list_org(session: Session) -> dict[str, Any]:
+    """Everyone with their groups and (through them) projects, the groups in order, and each group's projects."""
+    by_group = _projects_by_group(session)
+    order = [p for (p,) in session.execute(select(Project.id).order_by(Project.created_at, Project.name))]
+
+    def projects_of(groups: list[str]) -> list[str]:
+        on = {pid for g in groups for pid in by_group.get(g, [])}
+        return [pid for pid in order if pid in on]
+
+    return {
+        "people": [{"id": p.id, "name": p.name, "groups": list(p.groups or []), "projects": projects_of(p.groups or [])} for p in _people(session)],
+        "groups": _group_names(session),
+        "projects_by_group": by_group,
+    }
+
+
 def list_people(session: Session, project_id: str) -> dict[str, Any]:
+    """The project's roster: everyone in its groups, and the groups at least one of them is in."""
     require_project(session, project_id)
-    people = session.scalars(select(Person).where(Person.project_id == project_id).order_by(Person.position))
-    groups = session.scalars(select(PersonGroup.name).where(PersonGroup.project_id == project_id).order_by(PersonGroup.position))
-    return {"people": [{"name": p.name, "groups": list(p.groups or [])} for p in people], "groups": list(groups)}
+    teams = set(project_groups(session, project_id))
+    members = [p for p in _people(session) if teams.intersection(p.groups or [])]
+    used = {g for p in members for g in p.groups or []}
+    return {"people": [{"name": p.name, "groups": list(p.groups or [])} for p in members], "groups": [g for g in _group_names(session) if g in used]}
+
+
+def member_names(session: Session, project_id: str) -> list[str]:
+    return [p["name"] for p in list_people(session, project_id)["people"]]
 
 
 def _check_length(value: str) -> None:
@@ -30,8 +83,20 @@ def _check_length(value: str) -> None:
         raise fail("name_too_long", f"{value[:20]}… is longer than {MAX_NAME} characters")
 
 
-def replace_people(session: Session, project_id: str, people: list[PersonInput], groups: list[str] | None = None) -> dict[str, Any]:
-    require_project(session, project_id)
+def replace_org(
+    session: Session,
+    people: list[PersonInput],
+    groups: list[str] | None = None,
+    projects_by_group: dict[str, list[str]] | None = None,
+    keep_person_id: int | None = None,
+) -> dict[str, Any]:
+    """Save the whole organisation roster.
+
+    A person sent with their `id` keeps it, so a rename keeps their account; without one, they're
+    matched by name. Anyone left out is removed, with their account. `keep_person_id` (whoever is
+    saving) can't be removed. `projects_by_group` maps a group to the projects it works on; left
+    out, each group keeps its projects (matched by name, so a renamed group must be sent with them).
+    """
     spelling: dict[str, str] = {}  # one spelling per group: "data" joins "Data"
 
     def group_name(raw: str) -> str | None:
@@ -44,8 +109,12 @@ def replace_people(session: Session, project_id: str, people: list[PersonInput],
     for g in groups or []:
         group_name(g)
 
-    rows: list[Person] = []
+    current = _people(session)
+    by_id = {p.id: p for p in current}
+    by_name = {p.name.lower(): p for p in current}
+    rows: list[tuple[Person | None, str, list[str]]] = []  # (existing row or None, name, groups)
     seen: set[str] = set()
+    kept: set[int] = set()
     for p in people:
         name = p.name.strip()
         if not name:
@@ -53,18 +122,76 @@ def replace_people(session: Session, project_id: str, people: list[PersonInput],
         if name.lower() in seen:
             raise fail("duplicate_person", f"{name} is listed twice")
         _check_length(name)
+        if p.id is not None and p.id not in by_id:
+            raise fail("unknown_person", f"{name} was removed by someone else; reload and try again")
+        if p.id is not None:
+            if p.id in kept:
+                raise fail("duplicate_person", f"{name} is listed twice")
+            row = by_id[p.id]
+        else:
+            row = by_name.get(name.lower())
+            if row is not None and row.id in kept:
+                row = None
         member_of = list(dict.fromkeys(g for g in map(group_name, p.groups) if g))
         seen.add(name.lower())
-        rows.append(Person(project_id=project_id, name=name, groups=member_of, position=len(rows)))
+        if row is not None:
+            kept.add(row.id)
+        rows.append((row, name, member_of))
+    if keep_person_id is not None and keep_person_id not in kept:
+        raise fail("cannot_remove_yourself", "You can't take yourself out of People")
 
     clash = next((g for key, g in spelling.items() if key in seen), None)
     if clash:
         raise fail("group_is_person", f"{clash} is both a person and a group, so @{clash} would be ambiguous")
 
-    session.execute(delete(Person).where(Person.project_id == project_id))
-    session.execute(delete(PersonGroup).where(PersonGroup.project_id == project_id))
+    project_ids = set(session.scalars(select(Project.id)))
+    if projects_by_group is None:
+        teams = {name.lower(): projects for name, projects in _projects_by_group(session).items()}
+    else:
+        teams = {}
+        for raw, projects in projects_by_group.items():
+            unknown = next((x for x in projects if x not in project_ids), None)
+            if unknown:
+                raise fail("unknown_project", f"There's no project {unknown}")
+            if raw.strip():
+                teams.setdefault(raw.strip().lower(), []).extend(projects)
+
+    session.execute(delete(ProjectTeam))
+    session.execute(delete(PersonGroup))
+    # Removing someone also removes their account (the database cascades it).
+    session.execute(delete(Person).where(Person.id.not_in(kept)))
+    # Park kept names first, so two people can swap names without tripping the unique index.
+    for row, _, _ in rows:
+        if row is not None:
+            row.name = f"__renaming__{row.id}"
     session.flush()
-    session.add_all(rows)
-    session.add_all(PersonGroup(project_id=project_id, name=g, position=i) for i, g in enumerate(spelling.values()))
+    for position, (row, name, member_of) in enumerate(rows):
+        if row is None:
+            session.add(Person(name=name, groups=member_of, position=position))
+        else:
+            row.name, row.groups, row.position = name, member_of, position
+    added = [PersonGroup(name=g, position=i) for i, g in enumerate(spelling.values())]
+    session.add_all(added)
     session.flush()
-    return {"people": [{"name": r.name, "groups": r.groups} for r in rows], "groups": list(spelling.values())}
+    session.add_all(ProjectTeam(project_id=pid, group_id=g.id) for g in added for pid in dict.fromkeys(teams.get(g.name.lower(), [])))
+    session.flush()
+    return list_org(session)
+
+
+def set_groups(session: Session, project_id: str, names: list[str]) -> dict[str, Any]:
+    """Make exactly these groups the ones working on the project. Returns its roster."""
+    require_project(session, project_id)
+    by_name = {g.name.lower(): g for g in session.scalars(select(PersonGroup))}
+    chosen: dict[int, PersonGroup] = {}
+    for raw in names:
+        if not raw.strip():
+            continue
+        group = by_name.get(raw.strip().lower())
+        if group is None:
+            raise fail("unknown_group", f"There's no group called {raw.strip()}; add it under Settings → People first")
+        chosen[group.id] = group
+    session.execute(delete(ProjectTeam).where(ProjectTeam.project_id == project_id))
+    session.flush()
+    session.add_all(ProjectTeam(project_id=project_id, group_id=gid) for gid in chosen)
+    session.flush()
+    return list_people(session, project_id)

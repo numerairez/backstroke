@@ -17,9 +17,20 @@ def app(tmp_path):
     return create_app(f"sqlite:///{tmp_path / 'test.db'}", seed=True)
 
 
+PASSWORD = "correct horse"
+
+
+def sign_up(client, name, email=None, password=PASSWORD, expect=201):
+    res = client.post("/api/auth/register", json={"name": name, "email": email or f"{name.lower()}@example.com", "password": password})
+    assert res.status_code == expect, res.json()
+    return res.json()
+
+
 @pytest.fixture
 def client(app):
+    """Signed in as Priya, the first account and so an admin."""
     with TestClient(app) as c:
+        sign_up(c, "Priya")
         yield c
 
 

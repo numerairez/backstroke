@@ -1,4 +1,4 @@
-import type { Attendee, Baseline, Category, Change, CommitSummary, DeliverableTrail, Diff, ItemEvent, ItemInput, Meeting, Metrics, PlanState, PreRead, Preview, Project, RegisterItem, Roster, Surprises, ValidationError } from "../types";
+import type { Account, Attendee, Baseline, Category, Change, CommitSummary, DeliverableTrail, Diff, ItemEvent, ItemInput, Me, Meeting, Metrics, OrgRoster, PlanState, PreRead, Preview, Project, RegisterItem, Roster, Surprises, ValidationError } from "../types";
 
 export class ApiError extends Error {
   status: number;
@@ -16,6 +16,9 @@ export class ApiError extends Error {
   }
 }
 
+/** Fired on window when a request comes back 401. */
+export const SIGNED_OUT = "backstroke:signed-out";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -23,12 +26,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const text = await res.text();
   const body = text ? JSON.parse(text) : {};
+  // Signed out (or the session expired): the app goes back to the sign-in page.
+  if (res.status === 401 && !path.startsWith("/auth/")) window.dispatchEvent(new Event(SIGNED_OUT));
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;
 }
 
 const post = <T>(path: string, body: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(body) });
 const patch = <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+const put = <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) });
 
 export interface VersionedState {
   version: number;
@@ -82,10 +88,21 @@ export interface KnowledgeOptions {
 const knowledgePath = (id: string, o: KnowledgeOptions) => `/api/projects/${id}/export/knowledge?history=${o.history}&notes=${o.notes}&closed=${o.closed}`;
 
 export const api = {
+  me: () => request<Me>("/auth/me"),
+  signUp: (name: string, email: string, password: string) => post<Me>("/auth/register", { name, email, password }),
+  signIn: (email: string, password: string) => post<Me>("/auth/login", { email, password }),
+  signOut: () => post<void>("/auth/logout", {}),
+  accounts: () => request<Account[]>("/auth/accounts"),
+  setAdmin: (accountId: number, isAdmin: boolean) => patch<Account>(`/auth/accounts/${accountId}`, { is_admin: isAdmin }),
+  removeAccount: (accountId: number) => request<void>(`/auth/accounts/${accountId}`, { method: "DELETE" }),
   categories: () => request<Category[]>("/categories"),
   projects: () => request<Project[]>("/projects"),
-  createProject: (name: string, description = "") => post<Project>("/projects", { name, description }),
+  createProject: (name: string, description = "", groups: string[] = []) => post<Project>("/projects", { name, description, groups }),
   project: (id: string) => request<Project>(`/projects/${id}`),
+  updateProject: (id: string, fields: { name?: string; description?: string }) => patch<Project>(`/projects/${id}`, fields),
+  setProjectGroups: (id: string, groups: string[]) => put<Roster>(`/projects/${id}/groups`, { groups }),
+  orgPeople: () => request<OrgRoster>("/people"),
+  saveOrgPeople: (roster: OrgRoster) => put<OrgRoster>("/people", roster),
   state: (id: string) => request<VersionedState>(`/projects/${id}/state`),
   version: (id: string, version: number) => request<VersionedState>(`/projects/${id}/versions/${version}`),
   commits: (id: string) => request<CommitSummary[]>(`/projects/${id}/commits?include_events=true`),
@@ -107,7 +124,6 @@ export const api = {
     return res.text();
   },
   people: (id: string) => request<Roster>(`/projects/${id}/people`),
-  savePeople: (id: string, roster: Roster) => request<Roster>(`/projects/${id}/people`, { method: "PUT", body: JSON.stringify(roster) }),
   meetings: (id: string) => request<Meeting[]>(`/projects/${id}/meetings`),
   createMeeting: (id: string, input: { title: string; held_on: string; attendees?: Attendee[] }) => post<Meeting>(`/projects/${id}/meetings`, input),
   updateMeeting: (id: string, meetingId: number, input: { title?: string; held_on?: string; attendees?: Attendee[]; notes?: string }) =>

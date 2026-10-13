@@ -54,31 +54,123 @@ def init_db(engine: Engine) -> None:
 
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
-        # Databases from before phases and progress need the projection columns added.
+        # Databases from before phases, progress and JIRA links need the projection columns added.
         columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(project_deliverable_state)")}
         if "phases" not in columns:
             conn.exec_driver_sql("ALTER TABLE project_deliverable_state ADD COLUMN phases JSON")
         if "finished_on" not in columns:
             conn.exec_driver_sql("ALTER TABLE project_deliverable_state ADD COLUMN finished_on VARCHAR")
-        # Databases from when a person had one group: move it into their list and the project's groups.
-        columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(project_people)")}
-        if "groups" not in columns:
-            conn.exec_driver_sql("ALTER TABLE project_people ADD COLUMN groups JSON NOT NULL DEFAULT '[]'")
-            if "group" in columns:
-                conn.exec_driver_sql("""UPDATE project_people SET groups = json_array("group") WHERE "group" IS NOT NULL""")
-                conn.exec_driver_sql(
-                    """INSERT INTO project_groups (project_id, name, position)
-                       SELECT project_id, "group", MIN(position) FROM project_people WHERE "group" IS NOT NULL GROUP BY project_id, "group" """
-                )
+        if "jira_url" not in columns:
+            conn.exec_driver_sql("ALTER TABLE project_deliverable_state ADD COLUMN jira_url VARCHAR")
+        _move_people_to_the_organisation(conn)
+        _members_to_teams(conn)
         # Databases from before closure reasons: actions closed as "done", decisions superseded.
         columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(register_items)")}
         if "outcome" not in columns:
             conn.exec_driver_sql("ALTER TABLE register_items ADD COLUMN outcome VARCHAR")
             conn.exec_driver_sql("UPDATE register_items SET status = 'closed', outcome = 'done' WHERE kind = 'action' AND status = 'done'")
             conn.exec_driver_sql("UPDATE register_items SET outcome = 'superseded' WHERE kind = 'decision' AND status = 'superseded'")
+        # Decisions close like everything else; superseded or withdrawn is their outcome.
+        conn.exec_driver_sql("UPDATE register_items SET status = 'closed' WHERE kind = 'decision' AND status = 'superseded'")
         _backfill_register_history(conn)
         for ddl in APPEND_ONLY_TRIGGERS:
             conn.execute(text(ddl))
+
+
+def _move_people_to_the_organisation(conn) -> None:
+    """Databases from when each project kept its own people and groups.
+
+    Everyone moves into one organisation list, merged by name ignoring case (the first spelling
+    wins and their groups are combined), and stays a member of the projects they were listed on.
+    Groups merge the same way. The old per-project tables are then dropped.
+    """
+    tables = {row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "project_people" not in tables:
+        return
+    columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(project_people)")}
+    groups_sql = "groups" if "groups" in columns else """json_array("group")""" if "group" in columns else "'[]'"
+    rows = conn.exec_driver_sql(
+        f"""SELECT pp.project_id, pp.name, {groups_sql} FROM project_people pp JOIN projects p ON p.id = pp.project_id
+            ORDER BY p.created_at, p.name, pp.position"""
+    ).all()
+    listed_groups = (
+        conn.exec_driver_sql(
+            "SELECT g.name FROM project_groups g JOIN projects p ON p.id = g.project_id ORDER BY p.created_at, p.name, g.position"
+        ).all()
+        if "project_groups" in tables
+        else []
+    )
+
+    groups: dict[str, str] = {}  # lower name -> spelling, in order
+    for (name,) in listed_groups:
+        if name and name.strip():
+            groups.setdefault(name.strip().lower(), name.strip())
+    people: dict[str, dict] = {}
+    for project_id, name, raw_groups in rows:
+        if not name or not name.strip():
+            continue
+        person = people.setdefault(name.strip().lower(), {"name": name.strip(), "groups": [], "projects": []})
+        for g in json.loads(raw_groups or "[]"):
+            if g and g.strip():
+                spelling = groups.setdefault(g.strip().lower(), g.strip())
+                if spelling not in person["groups"]:
+                    person["groups"].append(spelling)
+        if project_id not in person["projects"]:
+            person["projects"].append(project_id)
+
+    # Who was on which project is turned into groups by _members_to_teams.
+    conn.exec_driver_sql("CREATE TABLE IF NOT EXISTS project_members (project_id VARCHAR, person_id INTEGER, PRIMARY KEY (project_id, person_id))")
+    existing = {name.lower(): pid for pid, name in conn.exec_driver_sql("SELECT id, name FROM people")}
+    position = conn.exec_driver_sql("SELECT COALESCE(MAX(position) + 1, 0) FROM people").scalar()
+    for key, person in people.items():
+        if key not in existing:
+            conn.exec_driver_sql("INSERT INTO people (name, groups, position) VALUES (?, ?, ?)", (person["name"], json.dumps(person["groups"]), position))
+            position += 1
+            existing[key] = conn.exec_driver_sql("SELECT last_insert_rowid()").scalar()
+        for project_id in person["projects"]:
+            conn.exec_driver_sql("INSERT OR IGNORE INTO project_members (project_id, person_id) VALUES (?, ?)", (project_id, existing[key]))
+    known = {name.lower() for (name,) in conn.exec_driver_sql("SELECT name FROM person_groups")}
+    position = conn.exec_driver_sql("SELECT COALESCE(MAX(position) + 1, 0) FROM person_groups").scalar()
+    for key, name in groups.items():
+        if key not in known:
+            conn.exec_driver_sql("INSERT INTO person_groups (name, position) VALUES (?, ?)", (name, position))
+            position += 1
+    conn.exec_driver_sql("DROP TABLE project_people")
+    if "project_groups" in tables:
+        conn.exec_driver_sql("DROP TABLE project_groups")
+
+
+def _members_to_teams(conn) -> None:
+    """Databases from when people were put on projects one by one: projects now take groups.
+
+    Each project's members become a group named after it ("Example Program team"), which the
+    project takes, so everyone stays on the projects they were on.
+    """
+    tables = {row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "project_members" not in tables:
+        return
+    rows = conn.exec_driver_sql(
+        """SELECT p.id, p.name, m.person_id FROM project_members m JOIN projects p ON p.id = m.project_id
+           JOIN people pe ON pe.id = m.person_id ORDER BY p.created_at, p.name, pe.position"""
+    ).all()
+    taken = {name.lower() for (name,) in conn.exec_driver_sql("SELECT name FROM person_groups UNION SELECT name FROM people")}
+    position = conn.exec_driver_sql("SELECT COALESCE(MAX(position) + 1, 0) FROM person_groups").scalar()
+    teams: dict[str, tuple[str, list[int]]] = {}
+    for project_id, project_name, person_id in rows:
+        teams.setdefault(project_id, (project_name, []))[1].append(person_id)
+    for project_id, (project_name, person_ids) in teams.items():
+        name, n = f"{project_name} team", 2
+        while name.lower() in taken:
+            name, n = f"{project_name} team {n}", n + 1
+        taken.add(name.lower())
+        conn.exec_driver_sql("INSERT INTO person_groups (name, position) VALUES (?, ?)", (name, position))
+        position += 1
+        group_id = conn.exec_driver_sql("SELECT last_insert_rowid()").scalar()
+        conn.exec_driver_sql("INSERT INTO project_teams (project_id, group_id) VALUES (?, ?)", (project_id, group_id))
+        for person_id in person_ids:
+            groups = json.loads(conn.exec_driver_sql("SELECT groups FROM people WHERE id = ?", (person_id,)).scalar() or "[]")
+            conn.exec_driver_sql("UPDATE people SET groups = ? WHERE id = ?", (json.dumps([*groups, name]), person_id))
+    conn.exec_driver_sql("DROP TABLE project_members")
 
 
 def _backfill_register_history(conn) -> None:
