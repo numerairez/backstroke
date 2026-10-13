@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event, text
@@ -64,6 +65,12 @@ def init_db(engine: Engine) -> None:
             conn.exec_driver_sql("ALTER TABLE project_deliverable_state ADD COLUMN jira_url VARCHAR")
         _move_people_to_the_organisation(conn)
         _members_to_teams(conn)
+        _sign_in_by_username(conn)
+        # Display settings kept outside the plan's history.
+        columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(projects)")}
+        for column in ("lane_order", "row_order"):
+            if column not in columns:
+                conn.exec_driver_sql(f"ALTER TABLE projects ADD COLUMN {column} JSON")
         # Databases from before closure reasons: actions closed as "done", decisions superseded.
         columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(register_items)")}
         if "outcome" not in columns:
@@ -171,6 +178,41 @@ def _members_to_teams(conn) -> None:
             groups = json.loads(conn.exec_driver_sql("SELECT groups FROM people WHERE id = ?", (person_id,)).scalar() or "[]")
             conn.exec_driver_sql("UPDATE people SET groups = ? WHERE id = ?", (json.dumps([*groups, name]), person_id))
     conn.exec_driver_sql("DROP TABLE project_members")
+
+
+def _sign_in_by_username(conn) -> None:
+    """Databases from when accounts signed in by email: people now carry a username and email.
+
+    Each account's email moves to its person, and the part before the @ becomes their username
+    (made unique), so everyone can still sign in. Sign-in sessions survive the move.
+    """
+    columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(people)")}
+    if "username" not in columns:
+        conn.exec_driver_sql("ALTER TABLE people ADD COLUMN username VARCHAR")
+        conn.exec_driver_sql("ALTER TABLE people ADD COLUMN email VARCHAR")
+        conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_people_username ON people (username)")
+        conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_people_email ON people (email)")
+    if "email" not in {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(accounts)")}:
+        return
+    taken = {u for (u,) in conn.exec_driver_sql("SELECT username FROM people WHERE username IS NOT NULL")}
+    for person_id, email in conn.exec_driver_sql("SELECT person_id, email FROM accounts ORDER BY id").all():
+        base = re.sub(r"[^a-z0-9._-]", "", email.split("@")[0].lower()) or "user"
+        username, n = base, 2
+        while username in taken:
+            username, n = f"{base}{n}", n + 1
+        taken.add(username)
+        conn.exec_driver_sql("UPDATE people SET username = COALESCE(username, ?), email = COALESCE(email, ?) WHERE id = ?", (username, email, person_id))
+    sessions = conn.exec_driver_sql("SELECT token_hash, account_id, created_at, expires_at FROM login_sessions").all()
+    conn.exec_driver_sql(
+        """CREATE TABLE accounts_new (
+            id INTEGER NOT NULL, person_id INTEGER NOT NULL, password_hash VARCHAR NOT NULL, is_admin BOOLEAN NOT NULL, created_at VARCHAR NOT NULL,
+            PRIMARY KEY (id), UNIQUE (person_id), FOREIGN KEY(person_id) REFERENCES people (id) ON DELETE CASCADE)"""
+    )
+    conn.exec_driver_sql("INSERT INTO accounts_new SELECT id, person_id, password_hash, is_admin, created_at FROM accounts")
+    conn.exec_driver_sql("DROP TABLE accounts")  # cascades to login_sessions, put back below
+    conn.exec_driver_sql("ALTER TABLE accounts_new RENAME TO accounts")
+    for row in sessions:
+        conn.exec_driver_sql("INSERT INTO login_sessions (token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)", tuple(row))
 
 
 def _backfill_register_history(conn) -> None:

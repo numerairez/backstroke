@@ -74,6 +74,10 @@ export interface Project {
   name: string;
   description: string;
   created_at: string;
+  /** Lane order, top to bottom (workstream ids): a display setting saved without a commit. */
+  lane_order: string[];
+  /** Order of bars within their lanes (deliverable ids), also saved without a commit. */
+  row_order: string[];
   version: number;
   baselines: Baseline[];
   /** The groups working on the project, in the organisation's order. */
@@ -260,6 +264,9 @@ export interface Roster {
 export interface OrgPerson extends Person {
   /** Missing for someone added but not saved yet. Kept across renames, so their account follows them. */
   id?: number;
+  /** What they sign in with, usually their Windows login (%USERNAME%). Blank until an admin sets it. */
+  username: string;
+  email: string;
   projects: string[];
 }
 
@@ -268,6 +275,7 @@ export interface Account {
   id: number;
   name: string;
   person_id: number;
+  username: string;
   email: string;
   is_admin: boolean;
 }

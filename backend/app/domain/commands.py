@@ -68,6 +68,14 @@ class ProjectUpdateRequest(BaseModel):
     description: str | None = None
 
 
+class LaneOrderRequest(BaseModel):
+    workstream_ids: list[str]  # top to bottom
+
+
+class RowOrderRequest(BaseModel):
+    deliverable_ids: list[str]  # top to bottom; only the order within each lane matters
+
+
 class DomainError(Exception):
     def __init__(self, errors: list[dict[str, Any]]):
         super().__init__("; ".join(e["message"] for e in errors))

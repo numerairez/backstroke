@@ -89,8 +89,9 @@ const knowledgePath = (id: string, o: KnowledgeOptions) => `/api/projects/${id}/
 
 export const api = {
   me: () => request<Me>("/auth/me"),
-  signUp: (name: string, email: string, password: string) => post<Me>("/auth/register", { name, email, password }),
-  signIn: (email: string, password: string) => post<Me>("/auth/login", { email, password }),
+  /** Choose a password for a username listed in People. Name and email are only for the first account. */
+  signUp: (username: string, password: string, first?: { name: string; email: string }) => post<Me>("/auth/register", { username, password, ...first }),
+  signIn: (username: string, password: string) => post<Me>("/auth/login", { username, password }),
   signOut: () => post<void>("/auth/logout", {}),
   accounts: () => request<Account[]>("/auth/accounts"),
   setAdmin: (accountId: number, isAdmin: boolean) => patch<Account>(`/auth/accounts/${accountId}`, { is_admin: isAdmin }),
@@ -101,6 +102,9 @@ export const api = {
   project: (id: string) => request<Project>(`/projects/${id}`),
   updateProject: (id: string, fields: { name?: string; description?: string }) => patch<Project>(`/projects/${id}`, fields),
   setProjectGroups: (id: string, groups: string[]) => put<Roster>(`/projects/${id}/groups`, { groups }),
+  /** Saved at once for everyone; lane order isn't part of the plan's history. */
+  setLaneOrder: (id: string, workstreamIds: string[]) => put<Project>(`/projects/${id}/lane-order`, { workstream_ids: workstreamIds }),
+  setRowOrder: (id: string, deliverableIds: string[]) => put<Project>(`/projects/${id}/row-order`, { deliverable_ids: deliverableIds }),
   orgPeople: () => request<OrgRoster>("/people"),
   saveOrgPeople: (roster: OrgRoster) => put<OrgRoster>("/people", roster),
   state: (id: string) => request<VersionedState>(`/projects/${id}/state`),

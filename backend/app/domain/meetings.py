@@ -34,6 +34,8 @@ class PersonInput(BaseModel):
     id: int | None = None  # keeps the person (and their account) across a rename
     name: str
     groups: list[str] = []
+    username: str | None = None  # what they sign in with; None keeps it, "" clears it
+    email: str | None = None  # None keeps it, "" clears it
 
 
 class PeopleRequest(BaseModel):

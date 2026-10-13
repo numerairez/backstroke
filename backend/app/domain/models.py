@@ -15,6 +15,11 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String)
     description: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String)
+    # How the plan's lanes are shown, top to bottom (workstream ids). A display setting, outside
+    # the plan's history: reordering isn't a commit. Lanes not listed follow, in plan order.
+    lane_order: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Likewise the order of bars within their lanes (deliverable ids); unlisted ones follow by start date.
+    row_order: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 # --- Identity: an entity exists (or once existed) with this id --------------------------
@@ -205,12 +210,18 @@ class RegisterEvent(Base):
 
 
 class Person(Base):
-    """Someone in the organisation. `groups` names the teams they're in, such as "Data"."""
+    """Someone in the organisation. `groups` names the teams they're in, such as "Data".
+
+    `username` (their Windows/network login, lower case) is what they sign in with; it and
+    `email` are set by an admin and are optional until the person needs to sign in.
+    """
 
     __tablename__ = "people"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, unique=True)
+    username: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
+    email: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
     groups: Mapped[list] = mapped_column(JSON, default=list)
     position: Mapped[int] = mapped_column(Integer)
 
@@ -239,13 +250,12 @@ class ProjectTeam(Base):
 
 
 class Account(Base):
-    """A person's sign-in. Only someone already listed in People can register one; the first is an admin."""
+    """A person's password. Only someone listed in People with a username can register one; the first is an admin."""
 
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     person_id: Mapped[int] = mapped_column(ForeignKey("people.id", ondelete="CASCADE"), unique=True)
-    email: Mapped[str] = mapped_column(String, unique=True)
     password_hash: Mapped[str] = mapped_column(String)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[str] = mapped_column(String)

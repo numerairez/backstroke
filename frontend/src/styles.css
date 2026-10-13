@@ -935,6 +935,35 @@ footer {
   border-bottom: 1px solid var(--grid);
   font-weight: 600;
 }
+/* A bar dragged up or down: where it would land. Another lane is a change to commit; reordering isn't. */
+.item.row-dragging {
+  opacity: 0.45;
+}
+.row-drop line {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.row-drop text {
+  fill: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+}
+.lane-label[draggable="true"] {
+  cursor: grab;
+}
+.lane-label.dragging {
+  opacity: 0.45;
+}
+/* Where a dragged lane would land. */
+.lane-label.drop-above {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.lane-label.drop-below {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
 .lane-label.removed .lane-name {
   text-decoration: line-through;
   color: var(--muted);
@@ -969,6 +998,32 @@ footer {
 }
 .lane-label:hover .lane-add {
   opacity: 1;
+}
+/* A round + sitting on the last lane's bottom line: add a workstream below it. */
+.lane-floor {
+  height: 32px;
+  padding-left: 7px;
+}
+.lane-new {
+  width: 22px;
+  height: 22px;
+  margin-top: -11px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  position: relative;
+  z-index: 1;
+}
+.lane-new:hover,
+.lane-new:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .item .shape {
@@ -3929,7 +3984,16 @@ button.done-btn:hover:not(:disabled) {
   margin-bottom: 8px;
 }
 .people-table td:first-child {
-  width: 30%;
+  width: 22%;
+}
+.login-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 170px;
+}
+.login-fields input.invalid {
+  border-color: var(--error);
 }
 .people-table td input {
   width: 100%;

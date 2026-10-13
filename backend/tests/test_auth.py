@@ -1,4 +1,4 @@
-"""Sign-in: only listed people register, the first account is an admin, and projects are hidden from non-members."""
+"""Sign-in: people sign in with the username listed in People, the first account is an admin, and projects are hidden from non-members."""
 
 import sqlite3
 
@@ -6,12 +6,13 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.seed import CHECKOUT_ID
+from app.services.auth_service import hash_password
 
 from .conftest import PASSWORD, sign_up
 
 
-def login(client, email, password=PASSWORD):
-    return client.post("/api/auth/login", json={"email": email, "password": password})
+def login(client, username, password=PASSWORD):
+    return client.post("/api/auth/login", json={"username": username, "password": password})
 
 
 def test_everything_needs_a_sign_in(app):
@@ -23,30 +24,34 @@ def test_everything_needs_a_sign_in(app):
 
 def test_the_first_account_is_an_admin_and_can_set_up_a_fresh_install(tmp_path):
     with TestClient(create_app(f"sqlite:///{tmp_path / 'fresh.db'}", seed=False)) as c:
-        me = sign_up(c, "Kim")["account"]
-        assert me["name"] == "Kim" and me["is_admin"] and me["email"] == "kim@example.com"
-        assert [p["name"] for p in c.get("/api/people").json()["people"]] == ["Kim"]  # added to People
+        assert sign_up(c, "kim", expect=422)["errors"][0]["code"] == "name_required"
+        assert sign_up(c, "kim lee", name="Kim", expect=422)["errors"][0]["code"] == "invalid_username"
+        me = sign_up(c, " CORP\\KLee ", name="Kim", email="Kim@Example.com")["account"]
+        assert me["name"] == "Kim" and me["is_admin"] and me["username"] == "klee" and me["email"] == "kim@example.com"
+        assert [(p["name"], p["username"]) for p in c.get("/api/people").json()["people"]] == [("Kim", "klee")]  # added to People
         assert c.get("/api/auth/me").json()["needs_setup"] is False
 
 
-def test_only_listed_people_can_register(client, app):
+def test_only_people_with_a_username_can_register(client, app):
     with TestClient(app) as other:
-        res = sign_up(other, "Stranger", expect=422)
-        assert res["errors"][0]["code"] == "not_listed"
-        ravi = sign_up(other, "ravi", email=" Ravi@Example.com ")["account"]
-        assert ravi["name"] == "Ravi" and not ravi["is_admin"] and ravi["email"] == "ravi@example.com"
+        assert sign_up(other, "stranger", expect=422)["errors"][0]["code"] == "not_listed"
+        assert sign_up(other, "", expect=422)["errors"][0]["code"] == "not_listed"
+        # Registering is choosing a password; name and email come from People.
+        ravi = sign_up(other, " RAVI ", name="Someone else", email="x@y.com")["account"]
+        assert ravi["name"] == "Ravi" and not ravi["is_admin"] and ravi["username"] == "ravi" and ravi["email"] == "ravi@example.com"
     with TestClient(app) as again:
-        assert sign_up(again, "Ravi", email="ravi2@example.com", expect=422)["errors"][0]["code"] == "already_registered"
-        assert sign_up(again, "Dana", email="ravi@example.com", expect=422)["errors"][0]["code"] == "email_taken"
-        assert sign_up(again, "Dana", password="short", expect=422)["errors"][0]["code"] == "password_too_short"
-        assert sign_up(again, "Dana", email="not-an-email", expect=422)["errors"][0]["code"] == "invalid_email"
+        assert sign_up(again, "ravi", expect=422)["errors"][0]["code"] == "already_registered"
+        assert sign_up(again, "dana", password="short", expect=422)["errors"][0]["code"] == "password_too_short"
 
 
 def test_sign_in_and_out(client, app):
     with TestClient(app) as c:
-        assert login(c, "priya@example.com", "wrong password").json()["errors"][0]["code"] == "wrong_credentials"
-        assert login(c, "nobody@example.com").json()["errors"][0]["code"] == "wrong_credentials"
-        assert login(c, " PRIYA@example.com").json()["account"]["name"] == "Priya"
+        assert login(c, "priya", "wrong password").json()["errors"][0]["code"] == "wrong_credentials"
+        assert login(c, "nobody").json()["errors"][0]["code"] == "wrong_credentials"
+        assert login(c, "dana").json()["errors"][0]["code"] == "wrong_credentials"  # listed, but no password yet
+        assert login(c, " PRIYA").json()["account"]["name"] == "Priya"
+        assert login(c, "CORP\\priya").json()["account"]["name"] == "Priya"  # a domain prefix is ignored
+        assert login(c, "Priya@Example.com").json()["account"]["name"] == "Priya"  # an email still works
         assert c.get("/api/projects").status_code == 200
         assert c.post("/api/auth/logout").status_code == 204
         assert c.get("/api/projects").status_code == 401
@@ -117,3 +122,54 @@ def test_removing_someone_from_people_removes_their_account(client, app):
         client.put("/api/people", json={"people": [p for p in everyone["people"] if p["name"] != "Ravi"], "groups": everyone["groups"]})
         assert ravi.get("/api/projects").status_code == 401
         assert [a["name"] for a in client.get("/api/auth/accounts").json()] == ["Priya"]
+
+
+def test_admins_set_usernames_and_emails_in_people(client, app):
+    everyone = client.get("/api/people").json()
+    people = [{**p, "username": "rkumar", "email": "Ravi.Kumar@Example.com"} if p["name"] == "Ravi" else p for p in everyone["people"]]
+    saved = client.put("/api/people", json={**everyone, "people": people}).json()
+    assert {p["name"]: (p["username"], p["email"]) for p in saved["people"]}["Ravi"] == ("rkumar", "ravi.kumar@example.com")
+    with TestClient(app) as ravi:
+        assert sign_up(ravi, "ravi", expect=422)["errors"][0]["code"] == "not_listed"
+        sign_up(ravi, "rkumar")
+        # Left out of a save, a username and email are kept.
+        client.put("/api/people", json={**everyone, "people": [{"id": p["id"], "name": p["name"], "groups": p["groups"]} for p in saved["people"]]})
+        assert ravi.get("/api/auth/me").json()["account"]["username"] == "rkumar"
+    swapped = [{**p, "username": {"priya": "dana", "dana": "priya"}.get(p["username"], p["username"])} for p in saved["people"]]
+    assert {p["name"]: p["username"] for p in client.put("/api/people", json={**everyone, "people": swapped}).json()["people"]}["Priya"] == "dana"
+    for change, code in (({"username": "dana"}, "duplicate_username"), ({"email": "dana@example.com"}, "duplicate_email"), ({"username": "r kumar"}, "invalid_username"), ({"email": "nope"}, "invalid_email")):
+        people = [{**p, **change} if p["name"] == "Ravi" else p for p in swapped]
+        assert client.put("/api/people", json={**everyone, "people": people}).json()["errors"][0]["code"] == code
+
+
+def test_accounts_that_signed_in_by_email_get_a_username(tmp_path):
+    path = tmp_path / "old.db"
+    with TestClient(create_app(f"sqlite:///{path}", seed=False)) as c:
+        sign_up(c, "ann", name="Ann")
+        cookie = c.cookies.get("backstroke_session")
+    # Put the database back how it was: emails on accounts, no usernames.
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            f"""
+            PRAGMA foreign_keys = OFF;
+            CREATE TABLE old_accounts (id INTEGER NOT NULL, person_id INTEGER NOT NULL, email VARCHAR NOT NULL, password_hash VARCHAR NOT NULL,
+                is_admin BOOLEAN NOT NULL, created_at VARCHAR NOT NULL, PRIMARY KEY (id), UNIQUE (person_id), UNIQUE (email),
+                FOREIGN KEY(person_id) REFERENCES people (id) ON DELETE CASCADE);
+            INSERT INTO old_accounts SELECT id, person_id, 'ann.lee@example.com', password_hash, is_admin, created_at FROM accounts;
+            DROP TABLE accounts;
+            ALTER TABLE old_accounts RENAME TO accounts;
+            DROP INDEX ix_people_username;
+            DROP INDEX ix_people_email;
+            ALTER TABLE people DROP COLUMN username;
+            ALTER TABLE people DROP COLUMN email;
+            INSERT INTO people (name, groups, position) VALUES ('Bo', '[]', 1);
+            INSERT INTO accounts SELECT 2, id, 'ann+lee@other.com', '{hash_password(PASSWORD)}', 0, '2026-01-02' FROM people WHERE name = 'Bo';
+            """
+        )
+    with TestClient(create_app(f"sqlite:///{path}", seed=False)) as c:
+        c.cookies.set("backstroke_session", cookie)
+        assert c.get("/api/auth/me").json()["account"]["username"] == "ann.lee"  # still signed in
+        people = {p["name"]: (p["username"], p["email"]) for p in c.get("/api/people").json()["people"]}
+        assert people == {"Ann": ("ann.lee", "ann.lee@example.com"), "Bo": ("annlee", "ann+lee@other.com")}
+        assert login(c, "annlee").json()["account"]["name"] == "Bo"
+    assert "email" not in {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(accounts)")}

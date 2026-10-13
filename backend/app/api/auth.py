@@ -20,13 +20,14 @@ auth_router = APIRouter(prefix="/api/auth")
 
 
 class RegisterRequest(BaseModel):
-    name: str
-    email: str
+    username: str
     password: str
+    name: str = ""  # first account only
+    email: str = ""  # first account only
 
 
 class LoginRequest(BaseModel):
-    email: str
+    username: str  # or their email
     password: str
 
 
@@ -77,13 +78,13 @@ def me(request: Request, session: Session = Depends(get_session)) -> dict[str, A
 
 @auth_router.post("/register", status_code=201)
 def register(body: RegisterRequest, request: Request, response: Response, session: Session = Depends(get_session)) -> dict[str, Any]:
-    account = auth_service.register(session, body.name, body.email, body.password)
+    account = auth_service.register(session, body.username, body.password, body.name, body.email)
     return _signed_in(response, request, session, account)
 
 
 @auth_router.post("/login")
 def login(body: LoginRequest, request: Request, response: Response, session: Session = Depends(get_session)) -> dict[str, Any]:
-    account = auth_service.login(session, body.email, body.password)
+    account = auth_service.login(session, body.username, body.password)
     return _signed_in(response, request, session, account)
 
 

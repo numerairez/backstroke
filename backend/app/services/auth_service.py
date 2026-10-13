@@ -1,8 +1,8 @@
 """Sign-in: accounts, passwords and sessions.
 
-Only someone already listed in People can register, by giving their name as listed there. The
-very first account is the exception: it can be anyone (adding them to People if needed) and is
-an admin, so a fresh install can be set up. Admins change Settings and see every project; anyone
+People sign in with the username an admin gave them in People (usually their Windows login), so
+registering is just choosing a password. The very first account is the exception: it can be
+anyone (adding them to People if needed) and is an admin, so a fresh install can be set up. Admins change Settings and see every project; anyone
 else sees only the projects their groups work on.
 
 Passwords are hashed with scrypt. A session is a random token in an HttpOnly cookie; only its
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -25,10 +24,10 @@ from ..domain.models import Account, LoginSession, Person
 from . import people_service
 from .commit_service import NotFound, utc_now
 from .meeting_service import fail
+from .people_service import EMAIL, USERNAME, clean_email, clean_username
 
 SESSION_DAYS = 30
 MIN_PASSWORD = 8
-EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # scrypt cost: n=2**14, r=8, p=1 (~16 MB, tens of milliseconds).
 SCRYPT = {"n": 2**14, "r": 8, "p": 1}
 
@@ -56,7 +55,7 @@ def check_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(actual.hex(), digest)
 
 
-# Compared against when the email is unknown, so a wrong email takes as long as a wrong password.
+# Compared against when the username is unknown, so a wrong username takes as long as a wrong password.
 _DUMMY_HASH = hash_password(secrets.token_hex(8))
 
 
@@ -66,7 +65,14 @@ def _token_hash(token: str) -> str:
 
 def account_to_dict(session: Session, account: Account) -> dict[str, Any]:
     person = session.get(Person, account.person_id)
-    return {"id": account.id, "name": person.name if person else "", "person_id": account.person_id, "email": account.email, "is_admin": account.is_admin}
+    return {
+        "id": account.id,
+        "name": person.name if person else "",
+        "person_id": account.person_id,
+        "username": (person.username if person else None) or "",
+        "email": (person.email if person else None) or "",
+        "is_admin": account.is_admin,
+    }
 
 
 def needs_setup(session: Session) -> bool:
@@ -78,37 +84,64 @@ def _check_password_rules(password: str) -> None:
         raise fail("password_too_short", f"Use at least {MIN_PASSWORD} characters")
 
 
-def register(session: Session, name: str, email: str, password: str) -> Account:
-    name, email = name.strip(), email.strip().lower()
-    if not EMAIL.match(email):
-        raise fail("invalid_email", "Enter an email address, like ana@example.com")
+def _person_by_username(session: Session, username: str) -> Person | None:
+    """Their username, or (for anyone used to it) their email."""
+    column = Person.email if "@" in username else Person.username
+    return session.scalar(select(Person).where(column == username)) if username else None
+
+
+def register(session: Session, username: str, password: str, name: str = "", email: str = "") -> Account:
+    """Choose a password for the person with this username. Name and email only matter for the first account."""
+    username = clean_username(username) or ""
     _check_password_rules(password)
-    if session.scalar(select(Account).where(Account.email == email)):
-        raise fail("email_taken", "That email already has an account; sign in instead")
-    first = needs_setup(session)
-    person = next((p for p in session.scalars(select(Person)) if p.name.lower() == name.lower()), None)
+    if needs_setup(session):
+        return _register_first(session, name.strip(), username, clean_email(email) or "", password)
+    person = _person_by_username(session, username)
     if person is None:
-        if not first:
-            raise fail("not_listed", "Only people listed in Backstroke can register. Check your name is spelled as an admin listed it, or ask an admin to add you")
-        if not name:
-            raise fail("name_required", "Enter your name")
-        if name.lower() in (g.lower() for g in people_service.list_org(session)["groups"]):
-            raise fail("group_is_person", f"{name} is a group's name; register with your own name")
-        person = Person(name=name, groups=[], position=session.scalar(select(func.count()).select_from(Person)))
-        session.add(person)
-        session.flush()
-    elif session.scalar(select(Account).where(Account.person_id == person.id)):
-        raise fail("already_registered", f"{person.name} already has an account. Sign in, or ask an admin to reset it")
-    account = Account(person_id=person.id, email=email, password_hash=hash_password(password), is_admin=first, created_at=utc_now())
+        raise fail("not_listed", "There's no one with that username in Backstroke. Check it with an admin, who can add it under Settings → People")
+    if session.scalar(select(Account).where(Account.person_id == person.id)):
+        raise fail("already_registered", f"{person.name} already has a password. Sign in, or ask an admin to reset it")
+    return _add_account(session, person, password, is_admin=False)
+
+
+def _register_first(session: Session, name: str, username: str, email: str, password: str) -> Account:
+    if not USERNAME.match(username):
+        raise fail("invalid_username", "Enter a username: letters, digits, dots, dashes and underscores")
+    if email and not EMAIL.match(email):
+        raise fail("invalid_email", "Enter an email address, like ana@example.com")
+    person = session.scalar(select(Person).where(Person.username == username))
+    if person is None:
+        person = next((p for p in session.scalars(select(Person)) if p.name.lower() == name.lower()), None) if name else None
+        if person is None:
+            if not name:
+                raise fail("name_required", "Enter your name")
+            if name.lower() in (g.lower() for g in people_service.list_org(session)["groups"]):
+                raise fail("group_is_person", f"{name} is a group's name; register with your own name")
+            person = Person(name=name, groups=[], position=session.scalar(select(func.count()).select_from(Person)))
+            session.add(person)
+        elif person.username and person.username != username:
+            raise fail("username_taken", f"{person.name} is listed with the username {person.username}")
+        person.username = username
+    if email:
+        if session.scalar(select(Person).where(Person.email == email, Person.id != person.id)) is not None:
+            raise fail("email_taken", "Someone else in People has that email")
+        person.email = email
+    session.flush()
+    return _add_account(session, person, password, is_admin=True)
+
+
+def _add_account(session: Session, person: Person, password: str, is_admin: bool) -> Account:
+    account = Account(person_id=person.id, password_hash=hash_password(password), is_admin=is_admin, created_at=utc_now())
     session.add(account)
     session.flush()
     return account
 
 
-def login(session: Session, email: str, password: str) -> Account:
-    account = session.scalar(select(Account).where(Account.email == email.strip().lower()))
+def login(session: Session, username: str, password: str) -> Account:
+    person = _person_by_username(session, clean_username(username) or "")
+    account = session.scalar(select(Account).where(Account.person_id == person.id)) if person else None
     if not check_password(password, account.password_hash if account else _DUMMY_HASH) or account is None:
-        raise fail("wrong_credentials", "That email and password don't match")
+        raise fail("wrong_credentials", "That username and password don't match. First time here? Choose Register to set your password")
     return account
 
 

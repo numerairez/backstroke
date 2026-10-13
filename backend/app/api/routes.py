@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
-from ..domain.commands import BaselineRequest, CommitRequest, DomainError, PreviewRequest, ProgressRequest, ProjectCreateRequest, ProjectUpdateRequest, RevertRequest
+from ..domain.commands import BaselineRequest, CommitRequest, DomainError, LaneOrderRequest, PreviewRequest, RowOrderRequest, ProgressRequest, ProjectCreateRequest, ProjectUpdateRequest, RevertRequest
 from ..domain.events import serialize_state
 from ..domain.meetings import FinishMeetingRequest, ItemCreateRequest, ItemInput, ItemUpdateRequest, MeetingCreateRequest, MeetingUpdateRequest, PeopleRequest, ProjectGroupsRequest
 from ..domain.validators import REASON_CATEGORIES
@@ -59,6 +59,22 @@ def get_project(project_id: str, session: Session = Depends(get_session)) -> dic
 @router.patch("/projects/{project_id}", dependencies=[Depends(require_admin)])
 def update_project(project_id: str, body: ProjectUpdateRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
     project = project_service.update_project(session, project_id, body.name, body.description)
+    session.commit()
+    return project_service.project_to_dict(session, project)
+
+
+@router.put("/projects/{project_id}/lane-order")
+def set_lane_order(project_id: str, body: LaneOrderRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Show the plan's lanes in this order, for everyone. Saved at once: lane order isn't part of the plan's history."""
+    project = project_service.set_lane_order(session, project_id, body.workstream_ids)
+    session.commit()
+    return project_service.project_to_dict(session, project)
+
+
+@router.put("/projects/{project_id}/row-order")
+def set_row_order(project_id: str, body: RowOrderRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Show the bars within each lane in this order, for everyone. Saved at once, without a commit."""
+    project = project_service.set_row_order(session, project_id, body.deliverable_ids)
     session.commit()
     return project_service.project_to_dict(session, project)
 

@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..domain.commands import DomainError
-from ..domain.models import Baseline, Commit, Project
+from ..domain.models import Baseline, Commit, DeliverableIdentity, Project, WorkstreamIdentity
 from . import people_service
 from .commit_service import NotFound, require_project, utc_now
 from .version_service import current_version
@@ -23,6 +23,8 @@ def project_to_dict(session: Session, project: Project) -> dict[str, Any]:
         "name": project.name,
         "description": project.description,
         "created_at": project.created_at,
+        "lane_order": list(project.lane_order or []),
+        "row_order": list(project.row_order or []),
         "version": current_version(session, project.id),
         "baselines": list_baselines(session, project.id),
         "groups": people_service.project_groups(session, project.id),
@@ -67,6 +69,30 @@ def update_project(session: Session, project_id: str, name: str | None = None, d
         project.name = _require_name(name)
     if description is not None:
         project.description = description.strip()
+    session.flush()
+    return project
+
+
+def set_lane_order(session: Session, project_id: str, workstream_ids: list[str]) -> Project:
+    """Show the lanes in this order. It isn't part of the plan, so it's saved at once, without a commit.
+
+    Ids that aren't the project's workstreams are dropped, and repeats are ignored.
+    """
+    project = require_project(session, project_id)
+    known = set(session.scalars(select(WorkstreamIdentity.id).where(WorkstreamIdentity.project_id == project_id)))
+    project.lane_order = [w for w in dict.fromkeys(workstream_ids) if w in known]
+    session.flush()
+    return project
+
+
+def set_row_order(session: Session, project_id: str, deliverable_ids: list[str]) -> Project:
+    """Show the bars within each lane in this order. Like lane order, saved at once, without a commit.
+
+    Which lane a bar is in is part of the plan, so moving one to another lane is still a commit.
+    """
+    project = require_project(session, project_id)
+    known = set(session.scalars(select(DeliverableIdentity.id).where(DeliverableIdentity.project_id == project_id)))
+    project.row_order = [d for d in dict.fromkeys(deliverable_ids) if d in known]
     session.flush()
     return project
 

@@ -256,10 +256,10 @@ MEETINGS = [
 
 
 def seed_people(session: Session) -> None:
-    """One organisation list. Projects take groups; the PMO (Priya) works on both."""
+    """One organisation list, each with a username (their name in lower case). Projects take groups; the PMO (Priya) works on both."""
     people_service.replace_org(
         session,
-        [PersonInput(name=n, groups=GROUPS[n]) for n in PEOPLE] + [PersonInput(name=n, groups=g) for n, g in CHECKOUT_PEOPLE],
+        [PersonInput(name=n, groups=g, username=n.lower(), email=f"{n.lower()}@example.com") for n, g in [(n, GROUPS[n]) for n in PEOPLE] + CHECKOUT_PEOPLE],
         projects_by_group={
             **{g: [PROJECT_ID] for g in ("Steering", "Business", "Data", "AI agent")},
             "PMO": [PROJECT_ID, CHECKOUT_ID],

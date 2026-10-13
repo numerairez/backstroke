@@ -5,11 +5,13 @@ number of groups (teams such as "Data"). A project takes groups, and its members
 them, which is who it offers as attendees and owners. The organisation roster is saved whole.
 
 Attendees and owners stay plain names, so renaming or removing someone here never rewrites a
-meeting or the register.
+meeting or the register. Each person can also have a username (what they sign in with, usually
+their Windows login) and an email; both are unique, ignoring case.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -19,6 +21,21 @@ from ..domain.meetings import MAX_NAME, PersonInput
 from ..domain.models import Person, PersonGroup, Project, ProjectTeam
 from .commit_service import require_project
 from .meeting_service import fail
+
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# A Windows login (%USERNAME%): letters, digits, dots, dashes and underscores.
+USERNAME = re.compile(r"^[a-z0-9._-]{1,64}$")
+
+
+def clean_username(raw: str | None) -> str | None:
+    """A username as stored: trimmed, lower case, without a DOMAIN\\ prefix. Blank is None."""
+    value = (raw or "").strip().lower().rsplit("\\", 1)[-1]
+    return value or None
+
+
+def clean_email(raw: str | None) -> str | None:
+    value = (raw or "").strip().lower()
+    return value or None
 
 
 def _people(session: Session) -> list[Person]:
@@ -59,7 +76,10 @@ def list_org(session: Session) -> dict[str, Any]:
         return [pid for pid in order if pid in on]
 
     return {
-        "people": [{"id": p.id, "name": p.name, "groups": list(p.groups or []), "projects": projects_of(p.groups or [])} for p in _people(session)],
+        "people": [
+            {"id": p.id, "name": p.name, "username": p.username or "", "email": p.email or "", "groups": list(p.groups or []), "projects": projects_of(p.groups or [])}
+            for p in _people(session)
+        ],
         "groups": _group_names(session),
         "projects_by_group": by_group,
     }
@@ -112,9 +132,11 @@ def replace_org(
     current = _people(session)
     by_id = {p.id: p for p in current}
     by_name = {p.name.lower(): p for p in current}
-    rows: list[tuple[Person | None, str, list[str]]] = []  # (existing row or None, name, groups)
+    rows: list[tuple[Person | None, str, list[str], str | None, str | None]] = []  # (existing row or None, name, groups, username, email)
     seen: set[str] = set()
     kept: set[int] = set()
+    usernames: dict[str, str] = {}  # username -> who has it
+    emails: dict[str, str] = {}
     for p in people:
         name = p.name.strip()
         if not name:
@@ -133,10 +155,24 @@ def replace_org(
             if row is not None and row.id in kept:
                 row = None
         member_of = list(dict.fromkeys(g for g in map(group_name, p.groups) if g))
+        username = clean_username(p.username) if p.username is not None else (row.username if row else None)
+        email = clean_email(p.email) if p.email is not None else (row.email if row else None)
+        if username:
+            if not USERNAME.match(username):
+                raise fail("invalid_username", f"{name}'s username {username} can only use letters, digits, dots, dashes and underscores")
+            if username in usernames:
+                raise fail("duplicate_username", f"{usernames[username]} and {name} both have the username {username}")
+            usernames[username] = name
+        if email:
+            if not EMAIL.match(email):
+                raise fail("invalid_email", f"{name}'s email {email} doesn't look like an email address")
+            if email in emails:
+                raise fail("duplicate_email", f"{emails[email]} and {name} both have the email {email}")
+            emails[email] = name
         seen.add(name.lower())
         if row is not None:
             kept.add(row.id)
-        rows.append((row, name, member_of))
+        rows.append((row, name, member_of, username, email))
     if keep_person_id is not None and keep_person_id not in kept:
         raise fail("cannot_remove_yourself", "You can't take yourself out of People")
 
@@ -160,16 +196,16 @@ def replace_org(
     session.execute(delete(PersonGroup))
     # Removing someone also removes their account (the database cascades it).
     session.execute(delete(Person).where(Person.id.not_in(kept)))
-    # Park kept names first, so two people can swap names without tripping the unique index.
-    for row, _, _ in rows:
+    # Park kept names first, so two people can swap names (or usernames) without tripping the unique indexes.
+    for row, *_ in rows:
         if row is not None:
-            row.name = f"__renaming__{row.id}"
+            row.name, row.username, row.email = f"__renaming__{row.id}", None, None
     session.flush()
-    for position, (row, name, member_of) in enumerate(rows):
+    for position, (row, name, member_of, username, email) in enumerate(rows):
         if row is None:
-            session.add(Person(name=name, groups=member_of, position=position))
+            session.add(Person(name=name, groups=member_of, position=position, username=username, email=email))
         else:
-            row.name, row.groups, row.position = name, member_of, position
+            row.name, row.groups, row.position, row.username, row.email = name, member_of, position, username, email
     added = [PersonGroup(name=g, position=i) for i, g in enumerate(spelling.values())]
     session.add_all(added)
     session.flush()

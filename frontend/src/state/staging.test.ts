@@ -105,3 +105,4 @@ describe("selecting changes to commit", () => {
     expect(changes).toEqual([slip]);
   });
 });
+

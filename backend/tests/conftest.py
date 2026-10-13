@@ -20,8 +20,9 @@ def app(tmp_path):
 PASSWORD = "correct horse"
 
 
-def sign_up(client, name, email=None, password=PASSWORD, expect=201):
-    res = client.post("/api/auth/register", json={"name": name, "email": email or f"{name.lower()}@example.com", "password": password})
+def sign_up(client, username, password=PASSWORD, expect=201, **first):
+    """Register by username (seeded people's usernames are their names in lower case). `first` takes the first account's name and email."""
+    res = client.post("/api/auth/register", json={"username": username, "password": password, **first})
     assert res.status_code == expect, res.json()
     return res.json()
 
@@ -30,7 +31,7 @@ def sign_up(client, name, email=None, password=PASSWORD, expect=201):
 def client(app):
     """Signed in as Priya, the first account and so an admin."""
     with TestClient(app) as c:
-        sign_up(c, "Priya")
+        sign_up(c, "priya")
         yield c
 
 

@@ -18,8 +18,8 @@ ME = {"name": "Priya"}
 
 
 def plain(people):
-    """People without their ids, which tests don't pin down."""
-    return [{k: v for k, v in p.items() if k != "id"} for p in people]
+    """People without their ids and sign-in details, which these tests don't pin down (see test_auth)."""
+    return [{k: v for k, v in p.items() if k not in ("id", "username", "email")} for p in people]
 
 
 def org(client):
@@ -189,7 +189,7 @@ def test_a_database_with_one_group_per_person_is_migrated(tmp_path):
         """,
     )
     with TestClient(create_app(f"sqlite:///{path}", seed=False)) as c:
-        sign_up(c, "Ann")
+        sign_up(c, "ann", name="Ann")
         assert roster(c, "p") == {
             "people": [{"name": "Ann", "groups": ["Data", "Old team"]}, {"name": "Bo", "groups": ["Old team"]}, {"name": "Cy", "groups": ["Data", "Old team"]}],
             "groups": ["Data", "Old team"],
@@ -211,7 +211,7 @@ def test_per_project_rosters_merge_into_the_organisation(tmp_path):
         """,
     )
     with TestClient(create_app(f"sqlite:///{path}", seed=False)) as c:
-        sign_up(c, "Ann")
+        sign_up(c, "ann", name="Ann")
         # Who was on each project becomes a group the project takes, so no one drops off.
         everyone = org(c)
         assert {**everyone, "people": plain(everyone["people"])} == {

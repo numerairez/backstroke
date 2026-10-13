@@ -3,17 +3,28 @@ import type { Change, Conflict, Deliverable, PlanState } from "../types";
 import { addDays, daysBetween, formatDate, formatMonth, signedDays } from "../state/dates";
 import { PHASE_COLORS, hasPhases, minDuration, moveEnd, moveStart, phaseDeltas, phaseLengths, phaseNameOrder, phaseSpans, refitPhases, samePhases } from "../state/phases";
 import { deliverableStatus, phaseStatuses, statusLabel } from "../state/status";
-import { BAR_HEIGHT, HEADER_HEIGHT, PHASE_ROW_HEIGHT, ROW_HEIGHT, buildTimelineModel, monthTicks, weekTicks, type TimelineItem, type TimelineModel } from "./model";
+import { BAR_HEIGHT, HEADER_HEIGHT, LANE_PADDING, PHASE_ROW_HEIGHT, ROW_HEIGHT, buildTimelineModel, monthTicks, weekTicks, type TimelineItem, type TimelineModel } from "./model";
 
 export const LANE_COLORS = ["#4f6bed", "#0e9384", "#d97706", "#9b51e0", "#db2777", "#0284c7", "#65a30d", "#dc5a2c"];
 const LABEL_WIDTH = 188;
 const EDGE_GRAB = 7;
 
 type DragMode = "move" | "start" | "end" | "boundary";
+/** Where a bar dragged up or down would land: above `before` in `lane`, or last in it (null). */
+interface RowTarget {
+  lane: string;
+  before: string | null;
+}
+
 interface DragState {
   id: string;
   mode: DragMode;
   originX: number;
+  originY: number;
+  /** Set once the pointer has moved a few pixels: sideways changes dates, up or down changes rows. */
+  axis: "x" | "y" | null;
+  /** For "y": where it would land, or null where dropping changes nothing. */
+  target?: RowTarget | null;
   delta: number;
   boundary?: number; // for "boundary": the phase whose edge is being moved
   edge?: "start" | "end"; // for "boundary": which edge of that phase
@@ -50,6 +61,12 @@ interface Props {
   onLaneMenu?: (workstreamId: string, date: string | undefined, x: number, y: number) => void;
   /** Right-click below the lanes. */
   onEmptyMenu?: (x: number, y: number) => void;
+  /** The + on the last lane's floor line; (x, y) is where to show the name prompt. */
+  onAddWorkstream?: (x: number, y: number) => void;
+  /** A lane's label was dragged: move it to just before `beforeId` (null: to the end). */
+  onMoveLane?: (workstreamId: string, beforeId: string | null) => void;
+  /** A bar was dragged up or down: show it above `beforeId` in that lane (null: last). */
+  onMoveRow?: (id: string, workstreamId: string, beforeId: string | null) => void;
   onOpenDetails?: (id: string) => void;
   /** Picking a bar to link to this one: clicks pick instead of selecting or dragging. */
   linkingFrom?: string | null;
@@ -241,19 +258,48 @@ export function TimelineCanvas(props: Props) {
       else if (g.x + g.w - localX <= EDGE_GRAB) mode = "end";
     }
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    setDrag({ id: item.id, mode, originX: e.clientX, delta: 0, boundary, edge, push: e.shiftKey });
+    setDrag({ id: item.id, mode, originX: e.clientX, originY: e.clientY, axis: mode === "move" ? null : "x", delta: 0, boundary, edge, push: e.shiftKey });
+  }
+
+  /** Where the dragged bar would land at `y`, or null if dropping there changes nothing. */
+  function rowTarget(y: number, id: string): RowTarget | null {
+    const lanes = model.lanes.filter((l) => !l.removed);
+    const lane = lanes.find((l) => y < l.y + l.height) ?? lanes[lanes.length - 1];
+    if (!lane) return null;
+    const rows = lane.items.filter((it) => it.status !== "removed");
+    const before = rows.filter((it) => it.id !== id).find((it) => y < it.rowY + ROW_HEIGHT / 2)?.id ?? null;
+    const at = rows.findIndex((it) => it.id === id);
+    if (at >= 0 && (rows[at + 1]?.id ?? null) === before) return null; // where it already is
+    return { lane: lane.workstream.id, before };
   }
 
   function onPointerMove(e: React.PointerEvent) {
     if (!drag) return;
-    const delta = Math.round((e.clientX - drag.originX) / dayWidth);
-    if (delta !== drag.delta || e.shiftKey !== drag.push) setDrag({ ...drag, delta, push: e.shiftKey });
+    const dx = e.clientX - drag.originX;
+    const dy = e.clientY - drag.originY;
+    let axis = drag.axis;
+    if (!axis) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 5) return;
+      axis = props.onMoveRow && Math.abs(dy) > Math.abs(dx) ? "y" : "x";
+    }
+    if (axis === "y") {
+      const y = e.clientY - (e.currentTarget as SVGSVGElement).getBoundingClientRect().top;
+      const target = rowTarget(y, drag.id);
+      if (axis !== drag.axis || target?.lane !== drag.target?.lane || target?.before !== drag.target?.before) setDrag({ ...drag, axis, target });
+      return;
+    }
+    const delta = Math.round(dx / dayWidth);
+    if (axis !== drag.axis || delta !== drag.delta || e.shiftKey !== drag.push) setDrag({ ...drag, axis, delta, push: e.shiftKey });
   }
 
   function onPointerUp() {
     if (!drag) return;
     const item = model.items.get(drag.id);
     setDrag(null);
+    if (drag.axis === "y") {
+      if (item && drag.target) props.onMoveRow?.(item.id, drag.target.lane, drag.target.before);
+      return;
+    }
     if (item && drag.delta === 0) props.onPick?.(item.id);
     if (!item || drag.delta === 0) return;
     const before = item.deliverable;
@@ -289,8 +335,36 @@ export function TimelineCanvas(props: Props) {
     props.onItemMenu?.(item.id, span ? span.index : null, e.clientX, e.clientY);
   };
 
+  // Reordering lanes by dragging their labels. `before` is the lane it would land above (null: last).
+  const [laneDrag, setLaneDrag] = useState<{ id: string; before: string | null } | null>(null);
+  const canMoveLanes = editable && !!props.onMoveLane;
+  const movable = model.lanes.filter((l) => !l.removed).map((l) => l.workstream);
+  const dropMarker = (() => {
+    if (!laneDrag) return null;
+    const from = movable.findIndex((w) => w.id === laneDrag.id);
+    const next = movable[from + 1]?.id ?? null;
+    if (laneDrag.before === laneDrag.id || laneDrag.before === next) return null; // dropping here changes nothing
+    if (laneDrag.before === null) return { id: movable[movable.length - 1]?.id, side: "below" as const };
+    return { id: laneDrag.before, side: "above" as const };
+  })();
+  const dropLane = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (laneDrag && dropMarker) props.onMoveLane?.(laneDrag.id, laneDrag.before);
+    setLaneDrag(null);
+  };
+
   const dragging = drag ? model.items.get(drag.id) : null;
   const dragPreview = dragging ? drawn(dragging) : null;
+  // The line a bar dragged up or down would land on, and the lane, if it's a different one.
+  const rowDrop = (() => {
+    if (drag?.axis !== "y" || !drag.target || !dragging) return null;
+    const lane = model.lanes.find((l) => l.workstream.id === drag.target!.lane);
+    if (!lane) return null;
+    const before = drag.target.before ? model.items.get(drag.target.before) : null;
+    const y = before ? before.rowY - 1 : lane.y + lane.height - LANE_PADDING;
+    const moving = lane.workstream.id !== dragging.deliverable.workstream_id ? lane.workstream.name : null;
+    return { y, moving, x: geometry(model, dragging.deliverable, dragging.rowY).x };
+  })();
 
   return (
     <div className={`timeline ${drag ? "is-dragging" : ""} ${props.linkingFrom ? "is-linking" : ""}`} ref={scrollRef}>
@@ -330,8 +404,33 @@ export function TimelineCanvas(props: Props) {
           {model.lanes.map((lane, i) => (
             <div
               key={lane.workstream.id}
-              className={`lane-label ${lane.removed ? "removed" : ""}`}
+              className={[
+                "lane-label",
+                lane.removed && "removed",
+                laneDrag?.id === lane.workstream.id && "dragging",
+                dropMarker?.id === lane.workstream.id && `drop-${dropMarker.side}`,
+              ]
+                .filter(Boolean)
+                .join(" ")}
               style={{ height: lane.height, ["--lane-color" as string]: LANE_COLORS[i % LANE_COLORS.length] }}
+              draggable={canMoveLanes && !lane.removed}
+              title={canMoveLanes && !lane.removed ? "Drag to reorder" : undefined}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", lane.workstream.name);
+                setLaneDrag({ id: lane.workstream.id, before: lane.workstream.id });
+              }}
+              onDragOver={(e) => {
+                if (!laneDrag) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                const r = e.currentTarget.getBoundingClientRect();
+                const below = e.clientY > r.top + r.height / 2;
+                const before = below ? (movable[movable.findIndex((w) => w.id === lane.workstream.id) + 1]?.id ?? null) : lane.workstream.id;
+                if (!lane.removed && before !== laneDrag.before) setLaneDrag({ ...laneDrag, before });
+              }}
+              onDrop={dropLane}
+              onDragEnd={() => setLaneDrag(null)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 if (!lane.removed) props.onLaneMenu?.(lane.workstream.id, undefined, e.clientX, e.clientY);
@@ -353,6 +452,29 @@ export function TimelineCanvas(props: Props) {
               )}
             </div>
           ))}
+          {editable && props.onAddWorkstream && model.lanes.length > 0 && (
+            <div
+              className="lane-floor"
+              onDragOver={(e) => {
+                if (!laneDrag) return;
+                e.preventDefault();
+                if (laneDrag.before !== null) setLaneDrag({ ...laneDrag, before: null });
+              }}
+              onDrop={dropLane}
+            >
+              <button
+                className="lane-new"
+                title="Add a workstream"
+                aria-label="Add a workstream"
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  props.onAddWorkstream!(r.left, r.bottom + 6);
+                }}
+              >
+                +
+              </button>
+            </div>
+          )}
         </div>
 
         <svg
@@ -480,7 +602,7 @@ export function TimelineCanvas(props: Props) {
             const checkX = status?.kind === "done" ? rx(status.finishedOn!) + dayWidth / 2 : null;
             const linkSource = props.linkingFrom === item.id;
             const linkTarget = linkDrag?.target === item.id;
-            const classes = ["item", d.type, phased && "phased", status && `st-${status.kind}`, staged && "staged", (selected || linkSource) && "selected", removed && "removed", editable && !removed && "editable", conflict && "conflict", animate && !drag && "animate", props.linkingFrom && !linkSource && !removed && "link-target", linkTarget && "link-hover"]
+            const classes = ["item", d.type, phased && "phased", status && `st-${status.kind}`, staged && "staged", (selected || linkSource) && "selected", removed && "removed", editable && !removed && "editable", conflict && "conflict", animate && !drag && "animate", props.linkingFrom && !linkSource && !removed && "link-target", linkTarget && "link-hover", drag?.axis === "y" && drag.id === item.id && "row-dragging"]
               .filter(Boolean)
               .join(" ");
             const labelInside = d.type === "task" && !phased && g.w > d.name.length * 6.6 + 16;
@@ -721,6 +843,17 @@ export function TimelineCanvas(props: Props) {
               </g>
             );
           })}
+
+          {rowDrop && (
+            <g className="row-drop">
+              <line x1={0} x2={model.width} y1={rowDrop.y} y2={rowDrop.y} />
+              {rowDrop.moving && (
+                <text x={rowDrop.x} y={rowDrop.y - 5}>
+                  Move to {rowDrop.moving} (a change to commit)
+                </text>
+              )}
+            </g>
+          )}
 
           {linkDrag && (
             <g className="link-drag">

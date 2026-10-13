@@ -45,22 +45,48 @@ export function AuthGate() {
   );
 }
 
+/** Remembered after a sign-in, so next time only the password is asked for. */
+const LAST_USERNAME = "backstroke.username";
+
+/**
+ * The username to start with: a `?user=` link (an office shortcut can pass `?user=%USERNAME%`,
+ * Windows' login name), else whoever signed in last on this browser.
+ */
+function startingUsername(): string {
+  const fromLink = new URLSearchParams(window.location.search).get("user")?.trim();
+  if (fromLink) return fromLink;
+  try {
+    return localStorage.getItem(LAST_USERNAME) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function SignIn(props: { needsSetup: boolean; onSignedIn: (account: Account) => void }) {
   const [mode, setMode] = useState<"login" | "register">(props.needsSetup ? "register" : "login");
   const [name, setName] = useState("");
+  const [username, setUsername] = useState(startingUsername);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const registering = mode === "register";
+  // With the username already known, start at the password.
+  const knownUser = !props.needsSetup && username !== "";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      const me = registering ? await api.signUp(name, email, password) : await api.signIn(email, password);
-      if (me.account) props.onSignedIn(me.account);
+      const me = registering ? await api.signUp(username, password, props.needsSetup ? { name, email } : undefined) : await api.signIn(username, password);
+      if (!me.account) return;
+      try {
+        localStorage.setItem(LAST_USERNAME, me.account.username);
+      } catch {
+        // Private windows can refuse storage; the username is just asked for again.
+      }
+      props.onSignedIn(me.account);
     } catch (err) {
       setError(message(err));
     } finally {
@@ -78,12 +104,12 @@ function SignIn(props: { needsSetup: boolean; onSignedIn: (account: Account) => 
           </svg>
           <span>Backstroke</span>
         </div>
-        <h1>{props.needsSetup ? "Set up Backstroke" : registering ? "Create your account" : "Sign in"}</h1>
+        <h1>{props.needsSetup ? "Set up Backstroke" : registering ? "Choose your password" : "Sign in"}</h1>
         <p className="muted">
           {props.needsSetup
             ? "No one has an account yet. The first account is the admin: it manages people, groups and projects in Settings."
             : registering
-              ? "You can register once an admin has listed you in People. Use your name exactly as it's listed."
+              ? "First time here? Once an admin has listed you in People with your username, choose a password to sign in with."
               : "Plan forward. Look back."}
         </p>
         {!props.needsSetup && (
@@ -96,16 +122,30 @@ function SignIn(props: { needsSetup: boolean; onSignedIn: (account: Account) => 
             </button>
           </div>
         )}
-        {registering && (
+        {props.needsSetup && (
           <label className="field">
-            <span>Your name{props.needsSetup ? "" : ", as listed in People"}</span>
+            <span>Your name</span>
             <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" autoFocus required />
           </label>
         )}
         <label className="field">
-          <span>Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" autoFocus={!registering} required />
+          <span>Username{props.needsSetup ? ", e.g. your Windows login" : ""}</span>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            autoFocus={!props.needsSetup && !knownUser}
+            required
+          />
         </label>
+        {props.needsSetup && (
+          <label className="field">
+            <span>Email</span>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required />
+          </label>
+        )}
         <label className="field">
           <span>Password{registering ? " (at least 8 characters)" : ""}</span>
           <input
@@ -114,14 +154,15 @@ function SignIn(props: { needsSetup: boolean; onSignedIn: (account: Account) => 
             onChange={(e) => setPassword(e.target.value)}
             autoComplete={registering ? "new-password" : "current-password"}
             minLength={registering ? 8 : undefined}
+            autoFocus={knownUser}
             required
           />
         </label>
         {error && <p className="callout error small">{error}</p>}
         <button className="primary signin-submit" disabled={busy}>
-          {busy ? "One moment…" : props.needsSetup ? "Create admin account" : registering ? "Create account" : "Sign in"}
+          {busy ? "One moment…" : props.needsSetup ? "Create admin account" : registering ? "Set password" : "Sign in"}
         </button>
-        {!registering && <p className="muted small">Forgot your password? Ask an admin to reset your account, then register again.</p>}
+        {!registering && <p className="muted small">Forgot your password? Ask an admin to reset your sign-in, then register again.</p>}
       </form>
     </div>
   );

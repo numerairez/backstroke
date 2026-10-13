@@ -20,12 +20,13 @@ import { MetricsPanel } from "./history/MetricsPanel";
 import { PlaybackControls } from "./history/PlaybackControls";
 import { addDays, formatTimestamp, todayIso } from "./state/dates";
 import { itemsFromNotes, parseNotes } from "./state/notes";
+import { moveLane, moveRow, orderLanes, orderRows } from "./state/lanes";
 import { newId, stagedEntityIds } from "./state/staging";
 import { useMeetings } from "./state/useMeetings";
 import { useProject } from "./state/useProject";
 import { PHASE_COLORS, phaseNameOrder } from "./state/phases";
 import { deliverableStatus, type StatusKind } from "./state/status";
-import { deliverableMenu, emptyMenu, laneMenu, type LinkRole, type MenuContext } from "./timeline/menus";
+import { deliverableMenu, emptyMenu, laneMenu, promptNewWorkstream, type LinkRole, type MenuContext } from "./timeline/menus";
 import { TimelineCanvas, type ColorBy } from "./timeline/TimelineCanvas";
 import type { Account, Category, Meeting, OrgRoster, PlanState, Project } from "./types";
 
@@ -267,12 +268,47 @@ export default function App({ account, onAccountChanged, onSignOut }: AppProps) 
   }, [shownVersion, ghostVersion, playing, viewVersion, p.version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lastShown = useRef<PlanState>(p.proposed);
-  const displayed: PlanState = showingLive ? p.proposed : (p.cachedStateAt(shownVersion!) ?? lastShown.current);
-  lastShown.current = displayed;
+  const shownPlan: PlanState = showingLive ? p.proposed : (p.cachedStateAt(shownVersion!) ?? lastShown.current);
+  lastShown.current = shownPlan;
+  // Lanes are shown in the project's saved order, a display setting outside the plan's history.
+  const laneOrder = useMemo(() => projects.find((x) => x.id === projectId)?.lane_order ?? [], [projects, projectId]);
+  const displayed: PlanState = useMemo(() => ({ ...shownPlan, workstreams: orderLanes(shownPlan.workstreams, laneOrder) }), [shownPlan, laneOrder]);
+  /** Move a lane and save the new order at once: no staged change, no commit. */
+  const moveLaneTo = (id: string, beforeId: string | null) => {
+    const next = projectId ? moveLane(displayed.workstreams.map((w) => w.id), id, beforeId) : null;
+    if (!projectId || !next) return;
+    const pid = projectId;
+    setProjects((ps) => ps.map((x) => (x.id === pid ? { ...x, lane_order: next } : x)));
+    api.setLaneOrder(pid, next).catch((e: ApiError) => {
+      window.alert(`Couldn't save the lane order: ${e.errors?.length ? e.errors.map((x) => x.message).join(" ") : e.message}`);
+      void reloadDirectory();
+    });
+  };
   const ghost = ghostVersion !== null ? (p.cachedStateAt(ghostVersion) ?? null) : null;
 
-  // Row order follows the persisted plan so rows don't jump while dragging or replaying.
-  const order = useMemo(() => [...p.persisted.deliverables].sort((a, b) => a.start_date.localeCompare(b.start_date) || a.id.localeCompare(b.id)).map((d) => d.id), [p.persisted]);
+  // Row order: the project's saved order, then the persisted plan's start dates, so rows don't
+  // jump while dragging or replaying.
+  const rowOrder = useMemo(() => projects.find((x) => x.id === projectId)?.row_order ?? [], [projects, projectId]);
+  const order = useMemo(() => orderRows(p.persisted.deliverables, rowOrder), [p.persisted, rowOrder]);
+  /**
+   * A bar dragged up or down. Its place in the lane is saved at once (no commit); dropping it in
+   * another lane also stages the workstream change, which is committed like any other.
+   */
+  const moveRowTo = (id: string, workstreamId: string, beforeId: string | null) => {
+    const d = displayed.deliverables.find((x) => x.id === id);
+    if (!projectId || !d) return;
+    if (d.workstream_id !== workstreamId) p.stage({ entity_type: "deliverable", entity_id: id, operation: "update", fields: { workstream_id: workstreamId } });
+    const all = [...order, ...displayed.deliverables.map((x) => x.id).filter((x) => !order.includes(x))];
+    const laneIds = displayed.deliverables.filter((x) => x.workstream_id === workstreamId).map((x) => x.id);
+    const next = moveRow(all, id, beforeId, laneIds);
+    if (!next) return;
+    const pid = projectId;
+    setProjects((ps) => ps.map((x) => (x.id === pid ? { ...x, row_order: next } : x)));
+    api.setRowOrder(pid, next).catch((e: ApiError) => {
+      window.alert(`Couldn't save the row order: ${e.errors?.length ? e.errors.map((x) => x.message).join(" ") : e.message}`);
+      void reloadDirectory();
+    });
+  };
   const stagedIds = useMemo(() => (showingLive ? stagedEntityIds(p.staged) : new Set<string>()), [p.staged, showingLive]);
   const conflicts = showingLive ? (p.preview?.conflicts ?? []) : [];
 
@@ -526,6 +562,7 @@ export default function App({ account, onAccountChanged, onSignOut }: AppProps) 
     },
     select,
     addDeliverable,
+    moveLane: moveLaneTo,
   };
   const showMenu = (items: MenuEntry[], x: number, y: number, heading?: string) => {
     if (!items.length) return;
@@ -624,6 +661,12 @@ export default function App({ account, onAccountChanged, onSignOut }: AppProps) 
         onItemMenu={openItemMenu}
         onLaneMenu={(id, date, x, y) => showMenu(laneMenu(menuContext, id, date), x, y, displayed.workstreams.find((w) => w.id === id)?.name)}
         onEmptyMenu={(x, y) => showMenu(emptyMenu(menuContext), x, y)}
+        onMoveLane={moveLaneTo}
+        onMoveRow={moveRowTo}
+        onAddWorkstream={(x, y) => {
+          menuAt.current = { x, y };
+          promptNewWorkstream(menuContext);
+        }}
         onOpenDetails={openDetails}
         onLink={(from, to) => link(from, "successor", to)}
       />
@@ -718,7 +761,7 @@ export default function App({ account, onAccountChanged, onSignOut }: AppProps) 
               <span className="nav-initials" aria-hidden="true">
                 {initials(account.name)}
               </span>
-              <span className="topbar-account-who" title={account.email}>
+              <span className="topbar-account-who" title={[account.username, account.email].filter(Boolean).join(" · ")}>
                 <b>{account.name}</b>
                 {account.is_admin && <span className="muted small">Admin</span>}
               </span>

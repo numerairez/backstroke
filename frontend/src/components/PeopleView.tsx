@@ -34,12 +34,17 @@ export function PeopleView(props: Props) {
   const people = draft.people;
   const unlistedProject = props.unlisted?.project;
   const unlisted = (props.unlisted?.names ?? []).filter((n) => !people.some((p) => key(p.name) === key(n)));
-  const addUnlisted = () => setDraft((d) => ({ ...d, people: [...d.people, ...unlisted.map((name) => ({ name, groups: [], projects: [] }))] }));
+  const addUnlisted = () => setDraft((d) => ({ ...d, people: [...d.people, ...unlisted.map((name) => ({ name, username: "", email: "", groups: [], projects: [] }))] }));
   /** The projects someone is on, through the groups they're in (as drafted). */
   const projectsOf = (groups: string[]) => props.projects.filter((x) => groups.some((g) => draft.projects_by_group[g]?.includes(x.id)));
   const duplicates = useMemo(() => {
     const seen = new Map<string, number>();
     for (const p of people) if (p.name.trim()) seen.set(key(p.name), (seen.get(key(p.name)) ?? 0) + 1);
+    return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
+  }, [people]);
+  const usernameTwice = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const p of people) if (p.username.trim()) seen.set(key(p.username), (seen.get(key(p.username)) ?? 0) + 1);
     return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
   }, [people]);
   const clashes = new Set(draft.groups.map(key).filter((g) => people.some((p) => key(p.name) === g)));
@@ -114,7 +119,7 @@ export function PeopleView(props: Props) {
     setSaving(true);
     try {
       await props.onSave({
-        people: people.filter((p) => p.name.trim()).map((p) => ({ id: p.id, name: p.name.trim(), groups: p.groups, projects: [] })),
+        people: people.filter((p) => p.name.trim()).map((p) => ({ id: p.id, name: p.name.trim(), username: p.username.trim(), email: p.email.trim(), groups: p.groups, projects: [] })),
         groups: draft.groups,
         projects_by_group: draft.projects_by_group,
       });
@@ -148,7 +153,7 @@ export function PeopleView(props: Props) {
                   Discard
                 </button>
               )}
-              <button className="primary" onClick={save} disabled={!dirty || saving || duplicates.size > 0 || clashes.size > 0}>
+              <button className="primary" onClick={save} disabled={!dirty || saving || duplicates.size > 0 || clashes.size > 0 || usernameTwice.size > 0}>
                 {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
               </button>
             </>
@@ -173,7 +178,7 @@ export function PeopleView(props: Props) {
                     + Add {unlisted.length} from {unlistedProject.name}
                   </button>
                 )}
-                <button className="small" onClick={() => setDraft((d) => ({ ...d, people: [...d.people, { name: "", groups: [], projects: [] }] }))}>
+                <button className="small" onClick={() => setDraft((d) => ({ ...d, people: [...d.people, { name: "", username: "", email: "", groups: [], projects: [] }] }))}>
                   + Add person
                 </button>
               </div>
@@ -189,6 +194,7 @@ export function PeopleView(props: Props) {
                   <thead>
                     <tr>
                       <th>Name</th>
+                      <th>Username &amp; email</th>
                       <th>Groups</th>
                       <th>Projects</th>
                       <th>Tag</th>
@@ -203,7 +209,8 @@ export function PeopleView(props: Props) {
                         person={p}
                         tag={p.name.trim() ? `@${handle(p.name, people)}` : ""}
                         problem={duplicates.has(key(p.name)) ? "Listed twice" : clashes.has(key(p.name)) ? "Same name as a group" : null}
-                        onName={(name) => setPerson(i, { name })}
+                        usernameProblem={usernameTwice.has(key(p.username)) ? "Someone else has this username" : null}
+                        onChange={(fields) => setPerson(i, fields)}
                         onJoin={(g) => join(i, g)}
                         onLeave={(g) => leave(i, g)}
                         projects={projectsOf(p.groups)}
@@ -218,7 +225,8 @@ export function PeopleView(props: Props) {
                 </table>
               )}
               <p className="muted small">
-                Removing someone doesn't change past meetings or register owners, but it does remove their sign-in. People register themselves with the name listed here.
+                Removing someone doesn't change past meetings or register owners, but it does remove their sign-in. People sign in with the username listed here (their
+                Windows login), choosing a password the first time. A link ending in <code>?user=%USERNAME%</code> fills it in for them.
               </p>
             </section>
 
@@ -315,7 +323,8 @@ function PersonRow(props: {
   projects: Project[];
   tag: string;
   problem: string | null;
-  onName: (name: string) => void;
+  usernameProblem: string | null;
+  onChange: (fields: Partial<OrgPerson>) => void;
   onJoin: (group: string) => void;
   onLeave: (group: string) => void;
   onRemove: () => void;
@@ -335,8 +344,32 @@ function PersonRow(props: {
   return (
     <tr className={props.problem ? "problem" : ""}>
       <td>
-        <input value={p.name} placeholder="Name" aria-label="Name" autoFocus={!p.name} onChange={(e) => props.onName(e.target.value)} title={props.problem ?? undefined} />
+        <input value={p.name} placeholder="Name" aria-label="Name" autoFocus={!p.name} onChange={(e) => props.onChange({ name: e.target.value })} title={props.problem ?? undefined} />
         {props.problem && <div className="error-text small">{props.problem}</div>}
+      </td>
+      <td>
+        <div className="login-fields">
+          <input
+            className={props.usernameProblem ? "invalid" : ""}
+            value={p.username}
+            placeholder="Username"
+            aria-label={`${p.name || "Their"} username`}
+            title={props.usernameProblem ?? "What they sign in with, e.g. their Windows login"}
+            autoCapitalize="none"
+            spellCheck={false}
+            onChange={(e) => props.onChange({ username: e.target.value })}
+          />
+          <input
+            type="email"
+            value={p.email}
+            placeholder="Email"
+            aria-label={`${p.name || "Their"} email`}
+            // Without a username yet, start from the email's name part.
+            onBlur={() => !p.username.trim() && p.email.includes("@") && props.onChange({ username: p.email.split("@")[0].trim().toLowerCase() })}
+            onChange={(e) => props.onChange({ email: e.target.value })}
+          />
+        </div>
+        {props.usernameProblem && <div className="error-text small">{props.usernameProblem}</div>}
       </td>
       <td>
         <div className="attendees">
@@ -383,9 +416,7 @@ function PersonRow(props: {
           <div className="signin-cell">
             {account ? (
               <>
-                <span className="small" title={account.email}>
-                  {account.email}
-                </span>
+                <span className="small">Password set</span>
                 <label className="small admin-toggle" title={isMe ? "Ask another admin to change your own rights" : undefined}>
                   <input type="checkbox" checked={account.is_admin} disabled={isMe} onChange={(e) => props.onSetAdmin(account.id, e.target.checked)} /> Admin
                 </label>
@@ -400,7 +431,7 @@ function PersonRow(props: {
                 )}
               </>
             ) : (
-              <span className="muted small">{p.id === undefined ? "Save first" : "Not registered"}</span>
+              <span className="muted small">{p.id === undefined ? "Save first" : !p.username.trim() ? "Needs a username" : "No password yet"}</span>
             )}
           </div>
         </td>

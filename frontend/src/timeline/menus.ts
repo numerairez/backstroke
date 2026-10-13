@@ -24,6 +24,8 @@ export interface MenuContext {
   startLink: (id: string, role: LinkRole) => void;
   select: (id: string | null) => void;
   addDeliverable: (workstreamId: string, date?: string, type?: "task" | "milestone") => void;
+  /** Move a lane to just before another (null: to the end). Saved at once, not staged. */
+  moveLane: (workstreamId: string, beforeId: string | null) => void;
 }
 
 const updateOf = (ctx: MenuContext, d: Deliverable) => (fields: Record<string, unknown>) =>
@@ -188,17 +190,18 @@ export function deliverableMenu(ctx: MenuContext, id: string, phase: number | nu
   ];
 }
 
+/** Ask for a name and stage a new workstream. */
+export function promptNewWorkstream(ctx: MenuContext) {
+  ctx.prompt({
+    label: "New workstream",
+    value: "",
+    submitLabel: "Add",
+    onSubmit: (name) => ctx.stage({ entity_type: "workstream", entity_id: newId("workstream"), operation: "create", fields: { name } }),
+  });
+}
+
 function addWorkstream(ctx: MenuContext): MenuEntry {
-  return {
-    label: "Add workstream…",
-    onSelect: () =>
-      ctx.prompt({
-        label: "New workstream",
-        value: "",
-        submitLabel: "Add",
-        onSubmit: (name) => ctx.stage({ entity_type: "workstream", entity_id: newId("workstream"), operation: "create", fields: { name } }),
-      }),
-  };
+  return { label: "Add workstream…", onSelect: () => promptNewWorkstream(ctx) };
 }
 
 export function laneMenu(ctx: MenuContext, workstreamId: string, date?: string): MenuEntry[] {
@@ -207,11 +210,6 @@ export function laneMenu(ctx: MenuContext, workstreamId: string, date?: string):
   const w = lanes[i];
   if (!w || !ctx.editable) return [];
   const count = ctx.state.deliverables.filter((d) => d.workstream_id === w.id).length;
-  const swap = (j: number) => {
-    const b = lanes[j];
-    ctx.stage({ entity_type: "workstream", entity_id: w.id, operation: "update", fields: { order_index: b.order_index } });
-    ctx.stage({ entity_type: "workstream", entity_id: b.id, operation: "update", fields: { order_index: w.order_index } });
-  };
   const here = date ? ` on ${formatDate(date)}` : "";
   return [
     { label: `Add deliverable${here}`, onSelect: () => ctx.addDeliverable(w.id, date) },
@@ -221,8 +219,8 @@ export function laneMenu(ctx: MenuContext, workstreamId: string, date?: string):
       label: "Rename workstream…",
       onSelect: () => ctx.prompt({ label: "Workstream name", value: w.name, onSubmit: (name) => ctx.stage({ entity_type: "workstream", entity_id: w.id, operation: "update", fields: { name } }) }),
     },
-    { label: "Move up", disabled: i === 0, onSelect: () => swap(i - 1) },
-    { label: "Move down", disabled: i === lanes.length - 1, onSelect: () => swap(i + 1) },
+    { label: "Move up", disabled: i === 0, onSelect: () => ctx.moveLane(w.id, lanes[i - 1].id) },
+    { label: "Move down", disabled: i === lanes.length - 1, onSelect: () => ctx.moveLane(w.id, lanes[i + 2]?.id ?? null) },
     addWorkstream(ctx),
     "separator",
     {
