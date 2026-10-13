@@ -521,6 +521,9 @@ export default function App({ account, onAccountChanged, onSignOut }: AppProps) 
   const narratedLines = narrated?.events ? describeEvents(narrated.events, [p.cachedStateAt(narrated.seq), p.cachedStateAt(narrated.seq - 1)].filter(Boolean) as PlanState[]) : [];
 
   const phaseNames = useMemo(() => phaseNameOrder(displayed.deliverables), [displayed.deliverables]);
+  // With no phases to colour by, the Lane/Phase toggle is hidden, so bars take their lane's colour
+  // rather than all turning grey (the remembered choice comes back once there are phases).
+  const barColorBy: ColorBy = phaseNames.length > 0 ? colorBy : "lane";
 
   // Status is judged as of today when live, or as of the commit's date when replaying history.
   const shownCommit = !showingLive && shownVersion ? p.commits.find((c) => c.seq === shownVersion) : undefined;
@@ -649,7 +652,7 @@ export default function App({ account, onAccountChanged, onSignOut }: AppProps) 
         focusKey={projectId ?? ""}
         asOf={asOf}
         expanded={expanded}
-        colorBy={colorBy}
+        colorBy={barColorBy}
         linkingFrom={linking?.id ?? null}
         onToggleExpand={toggleExpand}
         onSelect={select}
